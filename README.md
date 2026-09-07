@@ -24,10 +24,10 @@ This diagram shows how our queue fits into a larger ecosystem of external servic
 
 ```mermaid
 graph LR
-    A[Producer Services] -->|gRPC Messages| C(Queue Cluster);
-    D[Consumer Services] <--|gRPC Pull/Push| C;
-    E[External Data Stores] <-->|Persistence Access| D;
-    F[Monitoring System (Prometheus/Grafana)] -->|Metrics Read| C;
+    A["Producer Services"] -->|gRPC Messages| C("Queue Cluster");
+    C -->|gRPC Pull/Push| D["Consumer Services"];
+    D -->|Persistence Access| E["External Data Stores"];
+    F["Monitoring System (Prometheus/Grafana)"] -->|Metrics Read| C;
 ```
 
 ### 2. Component Diagram - Internal Structure
@@ -35,17 +35,26 @@ This illustrates the internal components of a single queue node and how they int
 
 ```mermaid
 graph LR
-    subgraph Queue Cluster Node
-        A[API Gateway / gRPC] --> B(Raft Consensus Engine);
-        B --> C{State Machine};
-        C --> D[(Durable State Storage)];
-        C --> E[Message Index / Metadata];
-        E --> F[Metrics Collector];
+    subgraph Node["Queue Cluster Node"]
+        A["API Gateway / gRPC"] --> B["Raft Consensus Engine"]
+        B --> C["State Machine"]
+        C --> D[("Durable State Storage")]
+        C --> E["Message Index / Metadata"]
+        E --> F["Metrics Collector"]
     end
 
-    subgraph Raft Group (Leader/Followers)
-        B -- Replication Log --> B;
+    subgraph RaftGroup["Raft Group - Leader and Followers"]
+        Leader["Leader"]
+        Follower1["Follower 1"]
+        Follower2["Follower 2"]
+
+        Leader -->|Replication Log| Follower1
+        Leader -->|Replication Log| Follower2
+        Follower1 -->|Acknowledgement| Leader
+        Follower2 -->|Acknowledgement| Leader
     end
+
+    B -.-> Leader
 ```
 
 ### 3. Sequence Diagram - Message Publish Flow
