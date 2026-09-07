@@ -1,0 +1,16 @@
+# .golangci.yml for basic linting configuration
+
+run:
+  # Basic rules to catch common errors and enforce standards
+  issues:
+    max-line-length: 120
+  linters:
+    enable:
+      - gofmt
+      - gosec
+      - vet
+      - unused
+    disable:
+      - staticcheck # Can be too aggressive for early scaffold
+
+# Add more linters and configurations here as the project grows.
