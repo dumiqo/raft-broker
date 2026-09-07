@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package messaging;
+
+option go_package = "./;messaging";
+
+// Core Message structure used across services
+message Message {
+  string message_id = 1;
+  string topic = 2;
+  int32 partition = 3;
+  string consumer_group = 4; // Optional: specifies the group receiving the message
+  bytes data = 5; // The actual payload
+  int64 timestamp = 6;
+}
+
+// --- Producer Service (Publish) ---
+service ProducerService {
+  // Publishes a single message to a given topic and partition.
+  rpc Publish(PublishRequest) returns (PublishResponse);
+}
+
+message PublishRequest {
+  string topic = 1;
+  int32 partition = 2;
+  bytes data = 3; // Data payload to be published
+  // Optional metadata fields can be added here, e.g., headers map<string, string> headers = 4;
+}
+
+message PublishResponse {
+  string message_id = 1;
+  bool success = 2;
+  string status_message = 3;
+}
+
+
+// --- Consumer Service (Consume/Ack/Nack) ---
+service ConsumerService {
+  // Streams messages for a specific consumer group on a topic.
+  rpc Consume(ConsumeRequest) returns (stream Message);
+
+  // Acknowledges successful consumption of a message.
+  rpc Acknowledge(AckRequest) returns (AckResponse);
+
+  // Negative acknowledges failure to process the message, potentially triggering redelivery/dead-letter queue logic.
+  rpc NegativeAcknowledge(NackRequest) returns (NackResponse);
+}
+
+message ConsumeRequest {
+  string topic = 1;
+  string consumer_group = 2;
+  int32 starting_offset = 3; // Starting point for consumption
+  // Optional: batch size hint, e.g., int32 max_messages = 4;
+}
+
+message AckRequest {
+  string message_id = 1;
+  int32 partition = 2;
+}
+
+message NackRequest {
+  string message_id = 1;
+  int32 partition = 2;
+  // Optional: reason for failure to help the backend retry logic
+  string failure_reason = 3;
+}
+
+message AckResponse {
+  bool success = true;
+  string status_message = "Message acknowledged successfully.";
+}
+
+message NackResponse {
+  bool success = true;
+  string status_message = "Message negative acknowledged and requeued/rejected.";
+}
