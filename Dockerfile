@@ -12,9 +12,10 @@ COPY go.sum .
 RUN go mod download
 
 # Copy source code
-COPY ./cmd/server .
+COPY ./cmd/server ./cmd/server
 COPY internal ./internal
 COPY pkg ./pkg
+COPY proto ./proto
 
 # Build the binary statically for minimal base image compatibility
 # Using CGO_ENABLED=0 ensures a static build, which is better for Alpine containers.
@@ -32,10 +33,10 @@ WORKDIR /app
 COPY --from=builder /broker /app/broker
 
 # Define required environment variables and default command execution
-ENV PORT=8080
 ENV NODE_ID=default-node
+ENV PORT=50051
 
 # Expose the port dynamically (although we will map it in compose)
-EXPOSE 8080
+EXPOSE 50051
 
 ENTRYPOINT ["/app/broker"]

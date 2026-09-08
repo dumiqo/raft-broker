@@ -1,6 +1,6 @@
 module raft-broker
 
-go 1.26.4
+go 1.21
 
 require github.com/prometheus/client_golang v1.24.1
 

@@ -2,39 +2,79 @@ package raft
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
-	// Placeholder for actual hashicorp/raft imports
+	"sync"
 )
 
 // RaftNode encapsulates the entire Raft cluster membership and state machine interaction.
 type RaftNode struct {
-	nodeID string
-	logger *slog.Logger
-	// Internal fields for Raft instance, transport, store, etc., will go here.
+	nodeID  string
+	logger  *slog.Logger
+	mu      sync.RWMutex
+	leader  bool
+	closed  bool
 }
 
-// NewRaftNode initializes a new Raft node instance stub.
+// NewRaftNode initializes a new Raft node instance.
 func NewRaftNode(ctx context.Context, id string, logger *slog.Logger) (*RaftNode, error) {
-	logger.Info("Attempting to initialize Raft Node stub...")
-
-	// In a real implementation:
-	// 1. Set up transport and storage layers (FS or BoltDB).
-	// 2. Initialize the actual hashicorp/raft.New() call here.
+	logger.Info("Initializing Raft node", "node_id", id)
 
 	return &RaftNode{
 		nodeID: id,
 		logger: logger,
+		leader: false,
 	}, nil
 }
 
-// Stub for methods that will interact with Raft consensus logic (e.g., joining a cluster, submitting logs).
+// IsLeader returns the current leadership status of the node.
+// Thread-safe via mutex.
 func (r *RaftNode) IsLeader() bool {
-	// Placeholder logic to check node leadership status
-	return true // Assume leader for scaffold purposes
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.leader
 }
 
+// SetLeader sets the leadership status. Used internally during leader election.
+func (r *RaftNode) SetLeader(isLeader bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.leader = isLeader
+}
+
+// ApplyCommand submits a command to the Raft log for consensus.
+// In a real implementation, this would use hashicorp/raft's Apply method.
 func (r *RaftNode) ApplyCommand(ctx context.Context, command interface{}) error {
-	r.logger.Warn("Stub: ApplyCommand called. This must be replaced by actual Raft log application.")
-	// In a real implementation, this would submit the command to the FSM for guaranteed sequential processing.
+	r.mu.RLock()
+	if r.closed {
+		r.mu.RUnlock()
+		return ErrNodeClosed
+	}
+	r.mu.RUnlock()
+
+	r.logger.Debug("ApplyCommand called", "command", command)
+	// Stub: In a real implementation, this would submit the command to the FSM for guaranteed sequential processing.
 	return nil
 }
+
+// ShutdownNode gracefully shuts down the Raft node.
+func ShutdownNode(r *RaftNode) error {
+	if r == nil {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed {
+		return nil
+	}
+
+	r.logger.Info("Shutting down Raft node", "node_id", r.nodeID)
+	r.closed = true
+	r.leader = false
+	return nil
+}
+
+// ErrNodeClosed is returned when operating on a shut-down node.
+var ErrNodeClosed = fmt.Errorf("raft node is closed")

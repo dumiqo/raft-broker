@@ -7,9 +7,9 @@ services:
       # Unique ID for Node A
       NODE_ID: "nodeA"
       # Listening port for Node A
-      LISTEN_PORT: "8001"
+      PORT: "50051"
     ports:
-      - "8001:8001"
+      - "50051:50051"
     healthcheck:
       test: ["CMD", "/bin/sh", "-c", "pgrep broker || exit 1"]
       interval: 5s
@@ -23,9 +23,9 @@ services:
       # Unique ID for Node B
       NODE_ID: "nodeB"
       # Listening port for Node B
-      LISTEN_PORT: "8002"
+      PORT: "50052"
     ports:
-      - "8002:8002"
+      - "50052:50052"
     healthcheck:
       test: ["CMD", "/bin/sh", "-c", "pgrep broker || exit 1"]
       interval: 5s
@@ -39,9 +39,9 @@ services:
       # Unique ID for Node C
       NODE_ID: "nodeC"
       # Listening port for Node C
-      LISTEN_PORT: "8003"
+      PORT: "50053"
     ports:
-      - "8003:8003"
+      - "50053:50053"
     healthcheck:
       test: ["CMD", "/bin/sh", "-c", "pgrep broker || exit 1"]
       interval: 5s

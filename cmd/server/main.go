@@ -2,59 +2,98 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
-	"time"
+	"strconv"
 
-	// Placeholder imports for dependencies we must stub out
-	// Assuming this path is correct after proto compilation
 	"raft-broker/internal/raft"
 	"raft-broker/pkg/metrics"
 )
 
-func main() {
-	// 1. Configuration Loading (Stub: Use environment variables)
-	nodeID := os.Getenv("RAFT_NODE_ID")
+// Config holds runtime configuration derived from environment variables.
+type Config struct {
+	NodeID string
+	Port   string
+}
+
+// LoadConfig reads and validates environment variables.
+func LoadConfig() (*Config, error) {
+	nodeID := os.Getenv("NODE_ID")
 	if nodeID == "" {
-		slog.Error("FATAL: RAFT_NODE_ID environment variable must be set.")
-		os.Exit(1)
+		return nil, fmt.Errorf("NODE_ID environment variable must be set")
 	}
 
-	// 2. Logger and Metric Initialization
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	metrics.RegisterMetrics() // Initialize the metric registry globally
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "50051"
+	}
 
-	slog.Info("Starting Raft Broker service...")
+	// Validate port is numeric
+	if _, err := strconv.Atoi(port); err != nil {
+		return nil, fmt.Errorf("PORT must be a valid integer, got: %q", port)
+	}
 
-	// 3. Initialize Raft Node (Stub)
-	_, err := raft.NewRaftNode(context.Background(), nodeID, logger)
+	return &Config{
+		NodeID: nodeID,
+		Port:   port,
+	}, nil
+}
+
+// RunServer initializes and starts the Raft Broker service.
+// Returns an error instead of calling os.Exit to enable testing.
+func RunServer(ctx context.Context) error {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	cfg, err := LoadConfig()
 	if err != nil {
-		logger.Error("Failed to initialize Raft Node", "error", err)
+		return fmt.Errorf("configuration error: %w", err)
+	}
+
+	logger.Info("Starting Raft Broker service",
+		"node_id", cfg.NodeID,
+		"port", cfg.Port,
+	)
+
+	// Initialize metric registry
+	metrics.RegisterMetrics()
+
+	// Initialize Raft node
+	node, err := raft.NewRaftNode(ctx, cfg.NodeID, logger)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Raft node: %w", err)
+	}
+	defer func() {
+		if r := raft.ShutdownNode(node); r != nil {
+			logger.Error("Error during Raft node shutdown", "error", r)
+		}
+	}()
+
+	// Start gRPC server
+	listenAddr := fmt.Sprintf(":%s", cfg.Port)
+	lis, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
+	}
+	defer lis.Close()
+
+	logger.Info("gRPC server listening", "address", lis.Addr().String())
+
+	// Stub: In a real scenario, we would register the generated pb.ServiceServer here.
+	// The actual gRPC server would be started with grpc.NewServer() and serve(lis).
+
+	// Block until context is cancelled
+	<-ctx.Done()
+	logger.Info("Shutting down server...")
+	return nil
+}
+
+func main() {
+	if err := RunServer(context.Background()); err != nil {
+		slog.Error("Server failed", "error", err)
 		os.Exit(1)
 	}
-
-	// 4. Start gRPC Server and Service Orchestration (Stub)
-	grpcServer := func() {
-		_, err := net.Listen("tcp", ":50051")
-		if err != nil {
-			logger.Error("Failed to listen on gRPC port", "error", err)
-			return
-		}
-
-		// Stub: In a real scenario, we would register the generated pb.ServiceServer interface implementation here.
-		slog.Info("Stubbing gRPC server start on :50051...")
-
-		go func() {
-			// Simulate waiting for connections/requests
-			time.Sleep(2 * time.Second)
-			logger.Info("gRPC stub listening successfully (no requests handled yet).")
-		}()
-	}
-
-	grpcServer()
-
-	// Keep the main routine alive until signaled to stop
-	slog.Info("Service initialized and running. Press Ctrl+C to exit.")
-	select {}
 }
