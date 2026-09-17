@@ -101,7 +101,7 @@ The system assumes a **Crash-Fail-Stop (CFS)** failure model for nodes and netwo
 This project is also an experiment in **AI-Assisted Software Engineering**. Our methodology involves:
 1.  **Hypothesis Generation:** Using AI (e.g., drafting the initial architecture).
 2.  **Critical Review & Constraint Definition:** Human experts defining invariants, failure boundaries, and non-functional requirements.
-3.  **Implementation & Testing:** Writing Go code backed by comprehensive Integration/Failure tests.
+3.  **Implementation & Testing:** Writing C# code backed by comprehensive Integration/Failure tests.
 4.  **AI Feedback Loop:** Using AI to assist in generating unit test cases based on failure scenarios (e.g., "Generate a test for leader failover during log application").
 
 > **Key Principle:** All AI-generated components must be treated as hypotheses and validated against explicit invariants, concurrency rules, and formal testing.
@@ -121,21 +121,31 @@ The current scope intentionally excludes:
 
 ## ⚙️ Technical Components & Implementation Details
 ### Technology Stack
-*   **Language:** Go (Concurrency via Goroutines/Channels).
-*   **RPC Framework:** gRPC.
+*   **Language:** C# (.NET 8+, Concurrency via Tasks/async-await).
+*   **RPC Framework:** gRPC with protobuf.
 *   **Consensus:** Raft Consensus Algorithm implementation.
 *   **Persistence:** Structured durable storage for logs and state snapshots.
+*   **Testing:** xUnit, NSubstitute, and custom test harnesses.
+*   **Dependency Injection:** Microsoft.Extensions.DependencyInjection.
 
 ### Concurrency Safety
-The design must address concurrency as a primary concern, utilizing Go primitives (Mutexes, Channels) to manage concurrent operations such as multiple producers, parallel consumer groups, and the inherent complexity of Raft's internal state transitions. Testing must include the use of the `go race detector`.
+The design must address concurrency as a primary concern, utilizing .NET primitives (Locks, Tasks, async/await) to manage concurrent operations such as multiple producers, parallel consumer groups, and the inherent complexity of Raft's internal state transitions. Testing must include thorough multi-threaded scenarios and stress tests.
 
 ## 📂 Project Structure
 (The folder structure remains modular to facilitate independent development of concerns.)
 ```text
-├── cmd/          # Entry points for client/server execution
-├── internal/     # Core business logic (raft, queue, storage)
-├── proto/        # Protocol buffers definitions (gRPC schemas)
-└── tests/         # Comprehensive test suites (unit, integration, failure)
+├── src/
+│   ├── RaftBroker.Consensus/    # Raft consensus engine and state machine
+│   ├── RaftBroker.Queue/        # Message queue core logic
+│   ├── RaftBroker.Api/          # gRPC API and service implementations
+│   ├── RaftBroker.Storage/      # Persistence layer
+│   └── RaftBroker.Protos/       # Protocol buffer definitions
+├── tests/
+│   ├── RaftBroker.Tests.Unit/   # Unit tests
+│   ├── RaftBroker.Tests.Integration/  # Integration tests
+│   └── RaftBroker.Tests.Chaos/  # Failure simulation and chaos tests
+├── RaftBroker.sln              # Solution file
+└── Dockerfile                   # Container image definition
 ```
 
 ## 🧑‍💻 Contribution Guide
