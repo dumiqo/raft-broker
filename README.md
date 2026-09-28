@@ -131,23 +131,6 @@ The current scope intentionally excludes:
 ### Concurrency Safety
 The design must address concurrency as a primary concern, utilizing .NET primitives (Locks, Tasks, async/await) to manage concurrent operations such as multiple producers, parallel consumer groups, and the inherent complexity of Raft's internal state transitions. Testing must include thorough multi-threaded scenarios and stress tests.
 
-## 📂 Project Structure
-(The folder structure remains modular to facilitate independent development of concerns.)
-```text
-├── src/
-│   ├── RaftBroker.Consensus/    # Raft consensus engine and state machine
-│   ├── RaftBroker.Queue/        # Message queue core logic
-│   ├── RaftBroker.Api/          # gRPC API and service implementations
-│   ├── RaftBroker.Storage/      # Persistence layer
-│   └── RaftBroker.Protos/       # Protocol buffer definitions
-├── tests/
-│   ├── RaftBroker.Tests.Unit/   # Unit tests
-│   ├── RaftBroker.Tests.Integration/  # Integration tests
-│   └── RaftBroker.Tests.Chaos/  # Failure simulation and chaos tests
-├── RaftBroker.sln              # Solution file
-└── Dockerfile                   # Container image definition
-```
-
 ## 🧑‍💻 Contribution Guide
 We encourage contributions that improve the system's robustness or deepen its theoretical understanding. Contributions should be accompanied by:
 1.  A clear definition of the feature or fix being implemented.
