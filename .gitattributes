@@ -1,0 +1,14 @@
+# Единые окончания строк (S0-T01).
+# Глобальный core.autocrlf=true больше не влияет: git хранит и отдаёт LF,
+# поэтому .editorconfig (end_of_line = lf) соблюдается и после свежего clone.
+* text=auto eol=lf
+
+# Двоичные артефакты, которые появятся в S1 и дальше, не нормализуем вовсе.
+*.wal binary
+*.snap binary
+*.seg binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.zip binary
