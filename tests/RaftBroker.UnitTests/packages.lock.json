@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net8.0": {
+      "raftbroker.core": {
+        "type": "Project"
+      },
+      "raftbroker.raft": {
+        "type": "Project",
+        "dependencies": {
+          "RaftBroker.Core": "[1.0.0, )",
+          "RaftBroker.Storage": "[1.0.0, )"
+        }
+      },
+      "raftbroker.statemachine": {
+        "type": "Project",
+        "dependencies": {
+          "RaftBroker.Core": "[1.0.0, )",
+          "RaftBroker.Raft": "[1.0.0, )"
+        }
+      },
+      "raftbroker.storage": {
+        "type": "Project",
+        "dependencies": {
+          "RaftBroker.Core": "[1.0.0, )"
+        }
+      },
+      "raftbroker.transport": {
+        "type": "Project",
+        "dependencies": {
+          "RaftBroker.Core": "[1.0.0, )",
+          "RaftBroker.Raft": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

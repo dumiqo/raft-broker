@@ -17,4 +17,21 @@
     <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
 
+  <!-- Воспроизводимость восстановления пакетов (S0-T02).
+       packages.lock.json коммитится в репозиторий; CI обязан восстанавливаться
+       в locked-режиме, то есть падать, если lock-файл разошёлся с csproj. -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>moderate</NuGetAuditLevel>
+  </PropertyGroup>
+
+  <!-- "CI" выставляет GitHub Actions. Локально lock-файлы обновляются обычным restore,
+       и это единственное место, где они меняются осознанно. Гейт `scripts/verify.ps1`
+       должен проверять то же самое локально (S0-T08). -->
+  <PropertyGroup Condition="'$(CI)' == 'true'">
+    <RestoreLockedMode>true</RestoreLockedMode>
+  </PropertyGroup>
+
 </Project>

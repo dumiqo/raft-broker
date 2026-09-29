@@ -1,0 +1,52 @@
+<Project>
+
+  <!--
+    Центральные версии пакетов (S0-T02).
+    Версия пакета живёт только в этом файле: в csproj у <PackageReference> не должно
+    быть атрибута Version (это ловит NU1008 - проверено пробой, см. отчёт задачи).
+
+    Правила:
+    - Версия берётся из раздела 2 "Технологический стек" плана; ничего своего не выдумываем.
+    - Пакет попадает сюда в той задаче, которая его подключает, а не заранее:
+      заранее пришпиленная версия - это версия, которую никто не проверял сборкой.
+    - Google.Protobuf пришпилен к 3.35.1 - ровно к той версии, с которой собран
+      Grpc 2.84.0 (Grpc.AspNetCore -> Google.Protobuf 3.35.1), чтобы кодогенерация
+      protoc и рантайм были из одной связки.
+    - Microsoft.Extensions.* 10.0.x несут сборку под net8.0 (проверено распаковкой
+      .nupkg: lib/net8.0 есть у Hosting, DependencyInjection, Options и остальных),
+      поэтому TFM решения остаётся net8.0, а не подтягивается до net10.0.
+
+    Ждёт своей задачи (специально не пришпилено):
+    - xUnit, Microsoft.NET.Test.Sdk, NSubstitute, coverlet, библиотека ассертов и
+      property-based хелпер - S0-T03 (там же ADR с выбором тестового стека).
+    - OpenTelemetry (экспорт Prometheus/OTLP) - S7.
+    - Testcontainers - S8.
+    - пакет для CRC32C под WAL - S1-T01 (в System.IO.Hashing CRC32C нет, только CRC32).
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!-- RPC: внутренний консенсус (S0-T06) и внешний API (S6). -->
+  <ItemGroup>
+    <PackageVersion Include="Google.Protobuf" Version="3.35.1" />
+    <PackageVersion Include="Grpc.AspNetCore" Version="2.84.0" />
+    <PackageVersion Include="Grpc.Net.Client" Version="2.84.0" />
+    <PackageVersion Include="Grpc.Tools" Version="2.84.0" />
+  </ItemGroup>
+
+  <!-- DI, хостинг, конфигурация, логирование. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
+  </ItemGroup>
+
+  <!-- Бенчмарки: этап S8. -->
+  <ItemGroup>
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+
+</Project>
