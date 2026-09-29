@@ -17,8 +17,8 @@
       поэтому TFM решения остаётся net8.0, а не подтягивается до net10.0.
 
     Ждёт своей задачи (специально не пришпилено):
-    - xUnit, Microsoft.NET.Test.Sdk, NSubstitute, coverlet, библиотека ассертов и
-      property-based хелпер - S0-T03 (там же ADR с выбором тестового стека).
+    - FsCheck - решение принято ADR `docs/adr/0001-test-stack.md` на S0-T03, но пакет
+      подключается в задаче первого настоящего property-теста (S1-T02).
     - OpenTelemetry (экспорт Prometheus/OTLP) - S7.
     - Testcontainers - S8.
     - пакет для CRC32C под WAL - S1-T01 (в System.IO.Hashing CRC32C нет, только CRC32).
@@ -42,6 +42,14 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
+  </ItemGroup>
+
+  <!-- Тесты: выбор зафиксирован ADR docs/adr/0001-test-stack.md (S0-T03).
+       xunit.v3 идёт без Microsoft.NET.Test.Sdk и без xunit.runner.visualstudio:
+       на SDK 10 запуск идёт через Microsoft.Testing.Platform (global.json). -->
+  <ItemGroup>
+    <PackageVersion Include="AwesomeAssertions" Version="9.6.0" />
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
   </ItemGroup>
 
   <!-- Бенчмарки: этап S8. -->

@@ -1,5 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Тестовый проект xunit.v3 - это исполняемая сборка (S0-T03). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AwesomeAssertions" />
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="AwesomeAssertions" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../../src/RaftBroker.Core/RaftBroker.Core.csproj" />
     <ProjectReference Include="../../src/RaftBroker.Storage/RaftBroker.Storage.csproj" />

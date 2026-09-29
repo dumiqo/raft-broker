@@ -1,0 +1,11 @@
+{
+  "sdk": {
+    "version": "10.0.100",
+    "rollForward": "latestFeature",
+    "comment": "SDK 10 собирает net8.0 и нужен для нового опыта dotnet test (MTP). Зафиксировано на S0-T03."
+  },
+  "test": {
+    "runner": "Microsoft.Testing.Platform",
+    "comment": "xunit.v3 на SDK 10 не работает через VSTest: 'Testing with VSTest target is no longer supported by Microsoft.Testing.Platform'. Это opt-in, без которого dotnet test падает."
+  }
+}
