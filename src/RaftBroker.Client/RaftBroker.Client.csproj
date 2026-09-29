@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../RaftBroker.Core/RaftBroker.Core.csproj" />
+  </ItemGroup>
+
+</Project>

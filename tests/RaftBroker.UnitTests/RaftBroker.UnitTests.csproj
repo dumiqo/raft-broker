@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RaftBroker.Core/RaftBroker.Core.csproj" />
+    <ProjectReference Include="../../src/RaftBroker.Storage/RaftBroker.Storage.csproj" />
+    <ProjectReference Include="../../src/RaftBroker.Raft/RaftBroker.Raft.csproj" />
+    <ProjectReference Include="../../src/RaftBroker.StateMachine/RaftBroker.StateMachine.csproj" />
+    <ProjectReference Include="../../src/RaftBroker.Transport/RaftBroker.Transport.csproj" />
+  </ItemGroup>
+
+</Project>
