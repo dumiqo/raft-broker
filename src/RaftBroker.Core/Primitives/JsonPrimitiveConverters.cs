@@ -5,10 +5,10 @@ using System.Text.Json.Serialization;
 namespace RaftBroker.Core.Primitives;
 
 /// <summary>
-/// Числовой примитив домена в JSON пишется голым числом, а не объектом вида <c>{"value":5}</c>:
+/// Числовой примитив домена пишется в JSON голым числом, а не объектом вида <c>{"value":5}</c>:
 /// эти типы попадают в конфиг узла (S4-T05) и в файлы, которые человек читает глазами.
-/// Ошибка чтения превращается в <see cref="JsonException"/> с именем типа, чтобы
-/// сообщение указывало на поле конфига.
+/// Ошибка чтения превращается в <see cref="JsonException"/> с именем типа, чтобы сообщение
+/// указывало на поле конфига, а не на внутренности сериализатора.
 /// </summary>
 internal abstract class LongPrimitiveJsonConverter<TSelf> : JsonConverter<TSelf>
     where TSelf : struct

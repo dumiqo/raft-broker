@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace RaftBroker.Core.Primitives;
 
 /// <summary>
@@ -15,12 +17,14 @@ internal static class Guard
         : throw new ArgumentOutOfRangeException(parameterName, value, "Значение не может быть отрицательным.");
 
     /// <summary>
-    /// Проверяет идентификатор узла или клиента: непустой, без пробелов по краям,
-    /// без управляющих символов, не длиннее <see cref="MaxIdentifierLength"/>.
+    /// Проверяет идентификатор узла или клиента: непустой, без пробелов и управляющих
+    /// символов, не длиннее <see cref="MaxIdentifierLength"/>.
     /// </summary>
     /// <remarks>
-    /// Пробелы по краям и управляющие символы отклоняются, а не обрезаются: опечатка в конфиге
+    /// Пробелы и управляющие символы отклоняются, а не обрезаются: опечатка в конфиге
     /// должна падать с понятной ошибкой, а не превращаться в другой идентификатор молча.
+    /// Внутренние пробелы запрещены вместе с крайними: <c>node 1</c> и <c>node-1</c> в логе
+    /// неразличимы глазом, а идентификатор ещё попадает в пути и метаданные gRPC.
     /// </remarks>
     internal static string Identifier(string value, string parameterName)
     {
@@ -29,29 +33,39 @@ internal static class Guard
             throw new ArgumentNullException(parameterName);
         }
 
-        if (value.Length == 0)
+        if (!IsValidIdentifier(value, out var reason))
         {
-            throw new ArgumentException("Идентификатор не может быть пустым.", parameterName);
+            throw new ArgumentException(reason, parameterName);
         }
 
-        if (value != value.Trim())
+        return value;
+    }
+
+    /// <summary>Не бросающая версия <see cref="Identifier"/> - для разбора внешних данных.</summary>
+    internal static bool IsValidIdentifier([NotNullWhen(true)] string? value, out string reason)
+    {
+        if (string.IsNullOrEmpty(value))
         {
-            throw new ArgumentException("Идентификатор не может начинаться или заканчиваться пробелами.", parameterName);
+            reason = "Идентификатор не может быть пустым.";
+            return false;
         }
 
         if (value.Length > MaxIdentifierLength)
         {
-            throw new ArgumentException($"Идентификатор длиннее {MaxIdentifierLength} символов.", parameterName);
+            reason = $"Идентификатор длиннее {MaxIdentifierLength} символов.";
+            return false;
         }
 
         foreach (var symbol in value)
         {
-            if (char.IsControl(symbol))
+            if (char.IsWhiteSpace(symbol) || char.IsControl(symbol))
             {
-                throw new ArgumentException("Идентификатор не может содержать управляющие символы.", parameterName);
+                reason = "Идентификатор не может содержать пробелы и управляющие символы.";
+                return false;
             }
         }
 
-        return value;
+        reason = string.Empty;
+        return true;
     }
 }
