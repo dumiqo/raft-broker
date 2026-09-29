@@ -33,7 +33,6 @@ public sealed class TestClock : CoreClock
     private const int MaxFiringsPerAdvance = 1_000_000;
 
     private readonly List<TestTimer> _timers = [];
-    private long _nowMs;
     private long _sequence;
     private bool _isAdvancing;
 
@@ -45,11 +44,11 @@ public sealed class TestClock : CoreClock
             throw new ArgumentOutOfRangeException(nameof(startMs), startMs, "Начальное время не может быть отрицательным.");
         }
 
-        _nowMs = startMs;
+        TimestampMs = startMs;
     }
 
     /// <inheritdoc />
-    public long TimestampMs => _nowMs;
+    public long TimestampMs { get; private set; }
 
     /// <summary>Сколько таймеров ещё ждёт срабатывания.</summary>
     public int PendingTimerCount => _timers.Count(timer => timer.IsActive);
@@ -59,7 +58,7 @@ public sealed class TestClock : CoreClock
     {
         ArgumentNullException.ThrowIfNull(callback);
 
-        var timer = new TestTimer(this, checked(_nowMs + ToMillisecondsUp(delay)), _sequence++, callback);
+        var timer = new TestTimer(this, checked(TimestampMs + ToMillisecondsUp(delay)), _sequence++, callback);
         _timers.Add(timer);
 
         return timer;
@@ -73,7 +72,7 @@ public sealed class TestClock : CoreClock
             throw new ArgumentOutOfRangeException(nameof(delta), delta, "Время нельзя двигать назад.");
         }
 
-        AdvanceTo(checked(_nowMs + ToMillisecondsUp(delta)));
+        AdvanceTo(checked(TimestampMs + ToMillisecondsUp(delta)));
     }
 
     /// <summary>Продвигает время до <paramref name="timestampMs"/> и срабатывает все таймеры, чей дедлайн наступил.</summary>
@@ -89,7 +88,7 @@ public sealed class TestClock : CoreClock
                 "AdvanceTo нельзя вызывать из колбэка таймера: порядок срабатываний перестал бы быть детерминированным. Поставьте новый таймер через Schedule.");
         }
 
-        if (timestampMs < _nowMs)
+        if (timestampMs < TimestampMs)
         {
             throw new ArgumentOutOfRangeException(nameof(timestampMs), timestampMs, "Время нельзя двигать назад.");
         }
@@ -112,11 +111,11 @@ public sealed class TestClock : CoreClock
                     break;
                 }
 
-                _nowMs = next.DeadlineMs;
+                TimestampMs = next.DeadlineMs;
                 next.Fire();
             }
 
-            _nowMs = timestampMs;
+            TimestampMs = timestampMs;
         }
         finally
         {

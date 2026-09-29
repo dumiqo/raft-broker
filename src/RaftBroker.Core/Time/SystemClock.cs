@@ -37,7 +37,6 @@ public sealed class SystemClock : IClock
     {
         private readonly System.Threading.Timer _timer;
         private readonly Action _callback;
-        private bool _isActive = true;
 
         internal SystemTimer(TimeSpan delay, Action callback)
         {
@@ -45,13 +44,13 @@ public sealed class SystemClock : IClock
             _timer = new System.Threading.Timer(static state => ((SystemTimer)state!).Fire(), this, delay, Timeout.InfiniteTimeSpan);
         }
 
-        public bool IsActive => _isActive;
+        public bool IsActive { get; private set; } = true;
 
         public void Cancel()
         {
-            if (_isActive)
+            if (IsActive)
             {
-                _isActive = false;
+                IsActive = false;
                 _timer.Dispose();
             }
         }
@@ -62,12 +61,12 @@ public sealed class SystemClock : IClock
         {
             // Колбэк может выполняться параллельно с Cancel: если отмену успели сделать
             // до входа сюда, колбэк не вызывается.
-            if (!_isActive)
+            if (!IsActive)
             {
                 return;
             }
 
-            _isActive = false;
+            IsActive = false;
             _timer.Dispose();
             _callback();
         }

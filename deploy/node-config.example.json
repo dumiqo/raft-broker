@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "node-a",
+  "port": 8080,
+  "peers": [
+    { "nodeId": "node-b", "endpoint": "node-b:8080" },
+    { "nodeId": "node-c", "endpoint": "node-c:8080" }
+  ]
+}

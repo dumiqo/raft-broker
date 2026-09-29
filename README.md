@@ -125,11 +125,32 @@ The current scope intentionally excludes:
 *   **RPC Framework:** gRPC with protobuf.
 *   **Consensus:** Raft Consensus Algorithm implementation.
 *   **Persistence:** Structured durable storage for logs and state snapshots.
-*   **Testing:** xUnit, NSubstitute, and custom test harnesses.
+*   **Testing:** xUnit.v3 with AwesomeAssertions and FsCheck (property-based), running on Microsoft.Testing.Platform - see `docs/adr/0001-test-stack.md`.
 *   **Dependency Injection:** Microsoft.Extensions.DependencyInjection.
 
 ### Concurrency Safety
 The design must address concurrency as a primary concern, utilizing .NET primitives (Locks, Tasks, async/await) to manage concurrent operations such as multiple producers, parallel consumer groups, and the inherent complexity of Raft's internal state transitions. Testing must include thorough multi-threaded scenarios and stress tests.
+
+## 🚀 Running Locally
+
+The repository builds with the .NET SDK 10 (pinned by `global.json`) and targets `net8.0`:
+
+```powershell
+dotnet build RaftBroker.sln
+dotnet test --solution RaftBroker.sln   # '--solution' is required on SDK 10
+```
+
+A three-node local cluster runs in containers:
+
+```powershell
+.\scripts\build.ps1          # build the node image
+.\scripts\run-cluster.ps1    # start three nodes and wait until they are healthy
+.\scripts\stop-cluster.ps1   # stop the cluster (node data is kept; -RemoveData drops it)
+```
+
+Node layout, ports, and the node configuration format are described in `deploy/README.md`.
+The nodes are already up and listening, but they do not yet speak Raft: consensus arrives at
+stage S2, gRPC hosting at S4.
 
 ## 🧑‍💻 Contribution Guide
 We encourage contributions that improve the system's robustness or deepen its theoretical understanding. Contributions should be accompanied by:

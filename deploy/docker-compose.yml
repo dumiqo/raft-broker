@@ -1,0 +1,62 @@
+# Локальный кластер из трёх узлов (S0-T07).
+#
+# Запуск: scripts/run-cluster.ps1 (он же вызывает docker compose). Вручную:
+#   docker compose -f deploy/docker-compose.yml up -d --build --wait
+#
+# Что здесь проверяется на этом этапе: три процесса поднимаются, у каждого свой
+# идентификатор в логе и свой порт на хосте, кворум из них собирается позже (S4-T05).
+
+name: raft-broker
+
+# Общая часть конфигурации узла: различаются только идентификатор, порт и список пиров.
+x-node: &node
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  image: raft-broker-node:local
+  # Рестарт по умолчанию выключен: при отладке упавший узел должен остаться упавшим,
+  # а не перезапускаться по кругу и прятать ошибку.
+  restart: "no"
+  stop_grace_period: 10s
+  # Порт внутри контейнера одинаков у всех трёх узлов: адресация между ними идёт
+  # по именам сервисов (node-b:8080), поэтому номер порта не разъезжается.
+  # Значение задаётся в каждом сервисе вместе с остальными настройками узла.
+  healthcheck:
+    # Пока на порту нет gRPC (он появится на S4-T01), проверяется TCP-доступность:
+    # процесс жив и слушает. Настоящая проверка состояния придёт вместе с gRPC.
+    test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8080'"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+
+services:
+  node-a:
+    <<: *node
+    container_name: raft-node-a
+    environment:
+      RaftBroker__Port: "8080"
+      RaftBroker__NodeId: node-a
+      RaftBroker__Peers: "node-b=node-b:8080,node-c=node-c:8080"
+    ports:
+      - "5001:8080"
+
+  node-b:
+    <<: *node
+    container_name: raft-node-b
+    environment:
+      RaftBroker__Port: "8080"
+      RaftBroker__NodeId: node-b
+      RaftBroker__Peers: "node-a=node-a:8080,node-c=node-c:8080"
+    ports:
+      - "5002:8080"
+
+  node-c:
+    <<: *node
+    container_name: raft-node-c
+    environment:
+      RaftBroker__Port: "8080"
+      RaftBroker__NodeId: node-c
+      RaftBroker__Peers: "node-a=node-a:8080,node-b=node-b:8080"
+    ports:
+      - "5003:8080"
