@@ -30,13 +30,11 @@ jobs:
       fail-fast: false
 
       matrix:
-        include:
-          - os: ubuntu-latest
-            shell: pwsh
+        os:
+          - ubuntu-latest
           # Windows PowerShell 5.1, а не pwsh: скрипты лежат в репозитории и должны
           # работать в том shell, который стоит на машине владельца по умолчанию.
-          - os: windows-latest
-            shell: powershell
+          - windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +50,17 @@ jobs:
           cache: true
           cache-dependency-path: '**/packages.lock.json'
 
-      - name: Гейт качества
-        shell: ${{ matrix.shell }}
+      # Оболочку нельзя выбирать через матрицу: свойство `shell` не поддерживает
+      # контексты и выражения ("You cannot use contexts or expressions"), поэтому
+      # `shell: ${{ matrix.shell }}` делает workflow-файл невалидным, и прогон падает
+      # ещё до старта job'а. Выбор делается условием по `runner.os`.
+      # Ссылка: https://github.com/actions/runner/issues/444
+      - name: Гейт качества (pwsh)
+        if: runner.os != 'Windows'
+        shell: pwsh
+        run: ./scripts/verify.ps1
+
+      - name: Гейт качества (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
         run: ./scripts/verify.ps1
