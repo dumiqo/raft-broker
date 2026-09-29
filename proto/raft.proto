@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package raftbroker.raft;
+
+option csharp_namespace = "RaftBroker.Transport.Proto";
+
+// Черновик внутреннего консенсус-протокола (S0-T06). Это скелет: набор сообщений
+// и четыре RPC. Семантика обработки (коды ошибок, правила адресации, что делать
+// при несовпадении cluster_id) финализируется на S4-T01.
+//
+// Правила эволюции схемы действуют с этого момента:
+//   * поля только добавляются; при удалении номер уходит в reserved и не переиспользуется;
+//   * номер поля - часть контракта, а не деталь оформления: тест ProtoContractTests
+//     фиксирует номера всех полей, поэтому перенумерация не пройдёт незаметно;
+//   * ничего "на будущее" здесь нет: поле появляется тогда, когда понятно, зачем оно.
+
+// Конверт, общий для всех запросов и ответов.
+//
+// Он отвечает на четыре вопроса, которые нужны на каждом RPC: какой это кластер,
+// кто отправитель, кто получатель и в каком терме отправитель. Отдельным сообщением,
+// а не полями в каждом сообщении, чтобы нельзя было забыть хотя бы одно из них.
+message RaftHeader {
+  // Идентификатор кластера: защита от смешивания трафика двух кластеров,
+  // случайно оказавшихся в одной сети.
+  string cluster_id = 1;
+
+  // NodeId отправителя.
+  string from = 2;
+
+  // NodeId получателя. Нужен, чтобы получатель мог заметить, что сообщение
+  // адресовано не ему после переименования узла, и чтобы лог был читаемым.
+  string to = 3;
+
+  // Term отправителя на момент отправки.
+  int64 term = 4;
+}
+
+// Запись журнала в том виде, в каком она едет по сети.
+//
+// payload - непрозрачные байты: Raft не знает, что внутри записи, и не должен.
+// Разделение домена и консенсуса проверяется тестом на отсутствие ссылки
+// Raft -> StateMachine (S0-T08, S4-T04).
+message LogEntry {
+  int64 index = 1;
+  int64 term = 2;
+  bytes payload = 3;
+}
+
+// Запрос голоса: кандидат сообщает свой терм и хвост своего журнала (§5.2, §5.4.1).
+message RequestVoteRequest {
+  RaftHeader header = 1;
+  int64 last_log_index = 2;
+  int64 last_log_term = 3;
+}
+
+message RequestVoteResponse {
+  RaftHeader header = 1;
+  bool vote_granted = 2;
+}
+
+// PreVote: пробный запрос голоса, который не меняет term ни у кого (§9.6).
+// Отдельные типы, а не переиспользование RequestVote*: ответы означают разное,
+// и цена разделения - четыре строки.
+message PreVoteRequest {
+  RaftHeader header = 1;
+  int64 last_log_index = 2;
+  int64 last_log_term = 3;
+}
+
+message PreVoteResponse {
+  RaftHeader header = 1;
+  bool vote_granted = 2;
+}
+
+// Репликация: пустой entries - это heartbeat.
+message AppendEntriesRequest {
+  RaftHeader header = 1;
+
+  // Consistency check (§5.3): запись непосредственно перед entries.
+  int64 prev_log_index = 2;
+  int64 prev_log_term = 3;
+
+  repeated LogEntry entries = 4;
+
+  // commitIndex лидера: получатель применяет записи до этого индекса.
+  int64 leader_commit = 5;
+}
+
+message AppendEntriesResponse {
+  RaftHeader header = 1;
+  bool success = 2;
+
+  // При success - индекс последней подтверждённой записи. При отказе значение
+  // не несёт смысла: подсказку для быстрого отката nextIndex добавит S3-T02,
+  // когда она будет спроектирована.
+  int64 match_index = 3;
+}
+
+// Установка снапшота: поток чанков, конец потока означает конец снапшота.
+// Поля offset нет намеренно: порядок чанков задаёт сам поток, а докачка
+// с середины в плане не заявлена.
+message InstallSnapshotRequest {
+  RaftHeader header = 1;
+  int64 snapshot_index = 2;
+  int64 snapshot_term = 3;
+
+  // Очередной кусок снапшота. Размер чанка выбирает отправитель.
+  bytes data = 4;
+}
+
+message InstallSnapshotResponse {
+  RaftHeader header = 1;
+  bool success = 2;
+  int64 snapshot_index = 3;
+}
+
+service RaftService {
+  rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
+  rpc PreVote(PreVoteRequest) returns (PreVoteResponse);
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+  rpc InstallSnapshot(stream InstallSnapshotRequest) returns (InstallSnapshotResponse);
+}

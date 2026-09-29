@@ -1,5 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!--
+    RaftBroker.Transport - единственный проект, который компилирует proto (S0-T06).
+    Схема лежит в proto/ в корне решения, а не рядом с проектом, потому что это
+    контракт между узлами, а не внутренность одного проекта: на S6-T01 туда же
+    добавится messaging.proto для внешнего API.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.AspNetCore" />
+    <!-- Grpc.Tools нужен только во время сборки: protoc не должен попадать в зависимости. -->
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ProtoRoot = proto/, поэтому импорты внутри схемы указываются от корня набора. -->
+    <Protobuf Include="../../proto/raft.proto" ProtoRoot="../../proto" GrpcServices="Both" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../RaftBroker.Core/RaftBroker.Core.csproj" />
     <ProjectReference Include="../RaftBroker.Raft/RaftBroker.Raft.csproj" />
