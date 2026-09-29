@@ -175,6 +175,12 @@
           "RaftBroker.Core": "[1.0.0, )"
         }
       },
+      "raftbroker.testkit": {
+        "type": "Project",
+        "dependencies": {
+          "RaftBroker.Core": "[1.0.0, )"
+        }
+      },
       "raftbroker.transport": {
         "type": "Project",
         "dependencies": {

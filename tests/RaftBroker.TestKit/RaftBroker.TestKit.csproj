@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Тестовые дубли (S0-T04, перенос в S0-T05-follow-up): TestClock, позже ненадёжные
+    реализации хранилища и транспорта. Отдельный проект, а не код внутри RaftBroker.Core,
+    потому что боевая сборка не должна везти с собой тестовые часы и их публичный API.
+    Пакетов тест-фреймворков здесь нет намеренно: этот проект должен быть пригоден
+    и для Benchmarks, и для нагрузочного стенда, которым xunit не нужен.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="../../src/RaftBroker.Core/RaftBroker.Core.csproj" />
+  </ItemGroup>
+
+</Project>

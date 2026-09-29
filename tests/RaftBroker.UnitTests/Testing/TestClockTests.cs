@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using RaftBroker.Core.Testing;
+using RaftBroker.TestKit.Time;
 
 namespace RaftBroker.UnitTests.Testing;
 

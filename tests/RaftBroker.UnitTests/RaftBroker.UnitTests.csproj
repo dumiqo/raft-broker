@@ -21,6 +21,7 @@
     <ProjectReference Include="../../src/RaftBroker.Raft/RaftBroker.Raft.csproj" />
     <ProjectReference Include="../../src/RaftBroker.StateMachine/RaftBroker.StateMachine.csproj" />
     <ProjectReference Include="../../src/RaftBroker.Transport/RaftBroker.Transport.csproj" />
+    <ProjectReference Include="../RaftBroker.TestKit/RaftBroker.TestKit.csproj" />
   </ItemGroup>
 
 </Project>

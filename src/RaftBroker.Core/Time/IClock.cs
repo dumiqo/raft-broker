@@ -6,8 +6,8 @@ namespace RaftBroker.Core.Time;
 /// будут ждать реального времени и станут недетерминированными.
 /// </summary>
 /// <remarks>
-/// Реализации: <see cref="SystemClock"/> в рантайме, <see cref="Testing.TestClock"/> в тестах
-/// и симуляторе. Значение <see cref="TimestampMs"/> монотонно: перевод системных часов
+/// Реализации: <see cref="SystemClock"/> в рантайме, <c>TestClock</c> из проекта
+/// <c>RaftBroker.TestKit</c> в тестах и симуляторе. Значение <see cref="TimestampMs"/> монотонно: перевод системных часов
 /// назад не должен ломать логику таймаутов.
 /// </remarks>
 public interface IClock

@@ -1,6 +1,7 @@
-using RaftBroker.Core.Randomness;
+using CoreClock = RaftBroker.Core.Time.IClock;
+using CoreTimer = RaftBroker.Core.Time.ITimer;
 
-namespace RaftBroker.Core.Testing;
+namespace RaftBroker.TestKit.Time;
 
 /// <summary>
 /// Виртуальное время с ручным продвижением. Таймеры срабатывают в порядке дедлайнов,
@@ -8,9 +9,9 @@ namespace RaftBroker.Core.Testing;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Живёт в <c>RaftBroker.Core</c>, а не в тестовом проекте, потому что нужен всем
-/// четырём тестовым проектам и детерминированному симулятору S8-T01, а отдельного
-/// shared-проекта для тестов в структуре решения нет.
+/// Живёт в <c>RaftBroker.TestKit</c> (см. ADR 0002), а не в <c>RaftBroker.Core</c>:
+/// часы нужны всем тестовым проектам и детерминированному симулятору S8-T01, но
+/// боевая сборка не должна везти их в себе.
 /// </para>
 /// <para>
 /// Класс намеренно не потокобезопасен и не претендует на это: детерминизм важнее
@@ -23,7 +24,7 @@ namespace RaftBroker.Core.Testing;
 /// <see cref="AdvanceTo"/> назад по времени запрещены.
 /// </para>
 /// </remarks>
-public sealed class TestClock : Time.IClock
+public sealed class TestClock : CoreClock
 {
     /// <summary>
     /// Предохранитель от бесконечного цикла: колбэк, который ставит новый таймер с нулевой
@@ -54,7 +55,7 @@ public sealed class TestClock : Time.IClock
     public int PendingTimerCount => _timers.Count(timer => timer.IsActive);
 
     /// <inheritdoc />
-    public Time.ITimer Schedule(TimeSpan delay, Action callback)
+    public CoreTimer Schedule(TimeSpan delay, Action callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
 
@@ -155,7 +156,7 @@ public sealed class TestClock : Time.IClock
         return best;
     }
 
-    private sealed class TestTimer : Time.ITimer
+    private sealed class TestTimer : CoreTimer
     {
         private readonly TestClock _clock;
         private readonly Action _callback;
