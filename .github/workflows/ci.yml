@@ -1,0 +1,57 @@
+name: ci
+
+# Гейт качества. Локальный эквивалент - scripts/verify.ps1: CI запускает тот же скрипт,
+# а не свою копию шагов, иначе "локально зелено" и "в CI зелено" начинают расходиться.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  # CI=true включает RestoreLockedMode (Directory.Build.props): устаревший lock-файл
+  # должен валить сборку, а не тихо обновляться.
+  CI: true
+
+jobs:
+  gate:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # Обе платформы должны доехать до конца: упавший Linux не повод не узнать про Windows.
+      fail-fast: false
+
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: pwsh
+          # Windows PowerShell 5.1, а не pwsh: скрипты лежат в репозитории и должны
+          # работать в том shell, который стоит на машине владельца по умолчанию.
+          - os: windows-latest
+            shell: powershell
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # Оба SDK нужны одновременно: global.json требует SDK 10 (dotnet test через
+          # Microsoft.Testing.Platform, ADR 0001), а тесты и узел исполняются на рантайме 8.0.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Гейт качества
+        shell: ${{ matrix.shell }}
+        run: ./scripts/verify.ps1

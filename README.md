@@ -148,6 +148,12 @@ A three-node local cluster runs in containers:
 .\scripts\stop-cluster.ps1   # stop the cluster (node data is kept; -RemoveData drops it)
 ```
 
+Before pushing, run the quality gate locally - it is exactly what CI runs:
+
+```powershell
+.\scripts\verify.ps1   # locked restore, build (warnings as errors), tests, format
+```
+
 Node layout, ports, and the node configuration format are described in `deploy/README.md`.
 The nodes are already up and listening, but they do not yet speak Raft: consensus arrives at
 stage S2, gRPC hosting at S4.
