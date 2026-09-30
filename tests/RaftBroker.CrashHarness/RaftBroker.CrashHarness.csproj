@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Жертва краш-тестов (S1-T05): отдельный процесс, который пишет сегмент и обрывается
+    на середине фрейма или заголовка. Отдельный проект, а не тестовая сборка, потому что
+    родительский тест обязан убить процесс снаружи (SIGKILL/TerminateProcess) - тогда
+    проверяется настоящее завершение процесса, а не модель "байты в дубле", и fsync
+    действительно доходит до устройства.
+
+    Пакетов нет намеренно: жертва работает тем же кодом хранилища, что и боевой узел,
+    и не должна приносить в тест ничего своего.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/RaftBroker.Core/RaftBroker.Core.csproj" />
+    <ProjectReference Include="../../src/RaftBroker.Storage/RaftBroker.Storage.csproj" />
+  </ItemGroup>
+
+</Project>

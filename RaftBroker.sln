@@ -33,6 +33,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RaftBroker.UnitTests", "tes
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RaftBroker.TestKit", "tests\RaftBroker.TestKit\RaftBroker.TestKit.csproj", "{D2A16E7C-E8DF-408C-ADB8-B11DAC14EF0D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RaftBroker.CrashHarness", "tests\RaftBroker.CrashHarness\RaftBroker.CrashHarness.csproj", "{741E191E-C919-481D-8A9C-DC5A106F0B05}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -199,6 +201,18 @@ Global
 		{D2A16E7C-E8DF-408C-ADB8-B11DAC14EF0D}.Release|x64.Build.0 = Release|Any CPU
 		{D2A16E7C-E8DF-408C-ADB8-B11DAC14EF0D}.Release|x86.ActiveCfg = Release|Any CPU
 		{D2A16E7C-E8DF-408C-ADB8-B11DAC14EF0D}.Release|x86.Build.0 = Release|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Debug|x64.Build.0 = Debug|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Debug|x86.Build.0 = Debug|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Release|Any CPU.Build.0 = Release|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Release|x64.ActiveCfg = Release|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Release|x64.Build.0 = Release|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Release|x86.ActiveCfg = Release|Any CPU
+		{741E191E-C919-481D-8A9C-DC5A106F0B05}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -217,5 +231,6 @@ Global
 		{3731AA70-A432-4DBA-8E52-8156C34A8699} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{6ED666AF-461A-41B9-9F57-BAA6827872D5} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{D2A16E7C-E8DF-408C-ADB8-B11DAC14EF0D} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{741E191E-C919-481D-8A9C-DC5A106F0B05} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

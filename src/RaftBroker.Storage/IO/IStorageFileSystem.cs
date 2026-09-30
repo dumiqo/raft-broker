@@ -31,4 +31,29 @@ public interface IStorageFileSystem
     /// <returns>Открытый на чтение файл со снимком длины на момент открытия.</returns>
     /// <exception cref="FileNotFoundException">Файла нет.</exception>
     ValueTask<IStorageReadFile> OpenReadAsync(string path, CancellationToken cancellationToken);
+
+    /// <summary>Укорачивает существующий файл до указанной длины и сбрасывает изменение на устройство.</summary>
+    /// <param name="path">Полный или относительный путь.</param>
+    /// <param name="length">Новая длина файла; не больше текущей.</param>
+    /// <param name="cancellationToken">Отмена до изменения файла.</param>
+    /// <remarks>
+    /// Добавлено в <c>S1-T05</c>: восстановление обязано физически убрать оборванный хвост
+    /// последнего сегмента (§9.2), иначе писатель допишет фрейм после мусора и сегмент перестанет
+    /// читаться. Операция только укорачивает: удлинение означало бы запись байтов, которых никто
+    /// не проверял, поэтому <paramref name="length"/> больше текущей длины - ошибка вызывающего.
+    /// </remarks>
+    /// <exception cref="FileNotFoundException">Файла нет.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> больше текущей длины файла.</exception>
+    ValueTask TruncateAsync(string path, long length, CancellationToken cancellationToken);
+
+    /// <summary>Удаляет файл.</summary>
+    /// <param name="path">Полный или относительный путь.</param>
+    /// <param name="cancellationToken">Отмена до удаления файла.</param>
+    /// <remarks>
+    /// Добавлено в <c>S1-T05</c>: оборванное создание сегмента (§9.3) чинится удалением файла,
+    /// а не игнорированием - иначе посторонний файл в каталоге ломает непрерывность индексов
+    /// при каждом старте. Отсутствие файла не ошибка: повторный старт после падения между
+    /// решением и удалением обязан просто повторить операцию.
+    /// </remarks>
+    ValueTask DeleteAsync(string path, CancellationToken cancellationToken);
 }

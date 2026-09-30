@@ -442,6 +442,13 @@
       "raftbroker.core": {
         "type": "Project"
       },
+      "raftbroker.crashharness": {
+        "type": "Project",
+        "dependencies": {
+          "RaftBroker.Core": "[1.0.0, )",
+          "RaftBroker.Storage": "[1.0.0, )"
+        }
+      },
       "raftbroker.raft": {
         "type": "Project",
         "dependencies": {

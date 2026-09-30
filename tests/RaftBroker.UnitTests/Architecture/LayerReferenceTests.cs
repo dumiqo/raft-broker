@@ -40,6 +40,11 @@ public sealed class LayerReferenceTests
         // обязан ссылаться на RaftBroker.Storage, то есть стоять выше всех боевых слоёв.
         // Но и ниже тестовых проектов (100): они ссылаются на TestKit - строго вниз.
         ["RaftBroker.TestKit"] = 99,
+
+        // Жертва краш-тестов (S1-T05) стоит на 98: на неё ссылается IntegrationTests (100),
+        // а она сама - только на Storage и Core. Выше боевых слоёв, чтобы боевой код
+        // не мог на неё сослаться случайно: это не библиотека, а исполняемая вспомогательная сборка.
+        ["RaftBroker.CrashHarness"] = 98,
         ["RaftBroker.UnitTests"] = 100,
         ["RaftBroker.IntegrationTests"] = 100,
         ["RaftBroker.SimulationTests"] = 100,
@@ -50,6 +55,7 @@ public sealed class LayerReferenceTests
     private static readonly HashSet<string> TestProjects = new(StringComparer.Ordinal)
     {
         "RaftBroker.TestKit",
+        "RaftBroker.CrashHarness",
         "RaftBroker.UnitTests",
         "RaftBroker.IntegrationTests",
         "RaftBroker.SimulationTests",
@@ -99,9 +105,10 @@ public sealed class LayerReferenceTests
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        // 13 проектов из раздела 3 плана (8 в src/, 5 в tests/). Число зафиксировано
-        // намеренно: 14-й проект обязан попасть в таблицу слоёв и в план, а не появиться молча.
-        discovered.Should().HaveCount(13);
+        // 14 проектов: 8 из раздела 3 плана (src/) и 6 в tests/. Число зафиксировано
+        // намеренно: 14-й проект (RaftBroker.CrashHarness, S1-T05) попадает в таблицу слоёв,
+        // в план и в ADR 0006, а не появляется молча.
+        discovered.Should().HaveCount(14);
 
         discovered.Should().BeEquivalentTo(
             LayerRanks.Keys,

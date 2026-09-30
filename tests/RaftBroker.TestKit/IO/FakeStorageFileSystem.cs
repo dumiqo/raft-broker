@@ -16,14 +16,21 @@ public enum StorageOperationKind
 
     /// <summary>Чтение байтов по смещению.</summary>
     Read,
+
+    /// <summary>Укорачивание файла до новой длины (S1-T05).</summary>
+    Truncate,
+
+    /// <summary>Удаление файла (S1-T05).</summary>
+    Delete,
 }
 
 /// <summary>Запись в журнале операций файловой системы: порядок операций и есть предмет проверки.</summary>
 /// <param name="Kind">Вид операции.</param>
 /// <param name="Path">Файл, над которым выполнена операция.</param>
 /// <param name="ByteCount">
-/// Число байтов; осмысленно для <see cref="StorageOperationKind.Write"/> и
-/// <see cref="StorageOperationKind.Read"/>.
+/// Число байтов; осмысленно для <see cref="StorageOperationKind.Write"/>,
+/// <see cref="StorageOperationKind.Read"/> (сколько прочитано) и
+/// <see cref="StorageOperationKind.Truncate"/> (новая длина файла).
 /// </param>
 public readonly record struct StorageOperation(StorageOperationKind Kind, string Path, int ByteCount = 0);
 
@@ -143,6 +150,40 @@ public sealed class FakeStorageFileSystem : IStorageFileSystem
         return ValueTask.FromResult<IStorageReadFile>(new FakeStorageReadFile(this, file));
     }
 
+    /// <inheritdoc />
+    public ValueTask TruncateAsync(string path, long length, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_files.TryGetValue(path, out var file))
+        {
+            throw new FileNotFoundException($"Файл '{path}' не создавался.", path);
+        }
+
+        if (length > file.Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(length),
+                length,
+                $"Усечение до {length} байт: файл '{path}' имеет длину {file.Count}.");
+        }
+
+        Record(new StorageOperation(StorageOperationKind.Truncate, path, (int)length));
+        file.Truncate(length);
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public ValueTask DeleteAsync(string path, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Record(new StorageOperation(StorageOperationKind.Delete, path));
+        _files.Remove(path);
+
+        return ValueTask.CompletedTask;
+    }
+
     /// <summary>Содержимое файла в том виде, в каком его записали.</summary>
     /// <param name="path">Путь файла.</param>
     /// <returns>Скопированные байты файла.</returns>
@@ -236,6 +277,9 @@ internal sealed class FakeStorageFile(FakeStorageFileSystem owner, string path) 
             _content.Add(value);
         }
     }
+
+    /// <summary>Укорачивает файл до <paramref name="length"/> байт.</summary>
+    internal void Truncate(long length) => _content.RemoveRange((int)length, _content.Count - (int)length);
 
     /// <summary>Копирует <paramref name="count"/> байтов начиная с <paramref name="offset"/>.</summary>
     internal void CopyTo(long offset, Span<byte> destination)

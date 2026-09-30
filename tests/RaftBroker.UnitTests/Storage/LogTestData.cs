@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using RaftBroker.Core.Primitives;
+using RaftBroker.Storage.Integrity;
 using RaftBroker.Storage.Log;
 using RaftBroker.TestKit.IO;
 using RaftBroker.TestKit.Time;
@@ -6,8 +8,8 @@ using RaftBroker.TestKit.Time;
 namespace RaftBroker.UnitTests.Storage;
 
 /// <summary>
-/// Общие построения тестов журнала (S1-T03, S1-T04): часы, каталог, записи,
-/// запись сегмента и чтение его назад.
+/// Общие построения тестов журнала (S1-T03, S1-T04, S1-T05): часы, каталог, записи,
+/// запись сегмента, чтение его назад и точечная порча готовых байтов.
 /// </summary>
 /// <remarks>
 /// Файл должен оставаться общим для писателя и читателя: если каждый заведёт свой способ
@@ -100,5 +102,37 @@ internal static class LogTestData
         }
 
         return records;
+    }
+
+    /// <summary>Смещения начал фреймов в готовом сегменте: тестам порчи нужны точные позиции.</summary>
+    /// <param name="segment">Байты сегмента целиком, включая заголовок.</param>
+    internal static List<int> FrameOffsets(byte[] segment)
+    {
+        var offsets = new List<int>();
+        var offset = LogSegmentFormat.HeaderSize;
+
+        while (offset < segment.Length)
+        {
+            offsets.Add(offset);
+            offset += LogFrameCodec.GetFrameSize((int)BinaryPrimitives.ReadUInt32LittleEndian(segment.AsSpan(offset)) - LogSegmentFormat.MinFrameLength);
+        }
+
+        return offsets;
+    }
+
+    /// <summary>
+    /// Пересчитывает CRC фрейма по его смещению.
+    /// </summary>
+    /// <param name="segment">Байты сегмента; CRC правится на месте.</param>
+    /// <param name="frameOffset">Смещение начала фрейма.</param>
+    /// <remarks>
+    /// Нужно там, где тест меняет поле внутри фрейма (индекс, терм, тип): без пересчёта такое
+    /// вмешательство выглядело бы порчей CRC, и проверялось бы не то правило.
+    /// </remarks>
+    internal static void FixFrameCrc(byte[] segment, int frameOffset)
+    {
+        var frameLength = (int)BinaryPrimitives.ReadUInt32LittleEndian(segment.AsSpan(frameOffset));
+        var crc = Crc32C.Compute(segment.AsSpan(frameOffset + sizeof(uint), frameLength));
+        BinaryPrimitives.WriteUInt32LittleEndian(segment.AsSpan(frameOffset + sizeof(uint) + frameLength), crc);
     }
 }

@@ -340,8 +340,8 @@ public sealed class SegmentReader : IAsyncDisposable
         if (!header.IsSuccess)
         {
             return header.Status == LogReadStatus.Truncated
-                ? SegmentOpenResult.Truncated(header.Reason)
-                : SegmentOpenResult.Corrupt(header.Reason);
+                ? SegmentOpenResult.Truncated(file.Length, header.Reason)
+                : SegmentOpenResult.Corrupt(file.Length, header.Reason);
         }
 
         // §9.1 правило 3: baseIndex живёт в двух местах - в заголовке и в имени файла, и они
@@ -350,6 +350,7 @@ public sealed class SegmentReader : IAsyncDisposable
         if (!LogSegmentFormat.TryParseFileName(path, out var fileNameIndex))
         {
             return SegmentOpenResult.Corrupt(
+                file.Length,
                 $"имя файла '{System.IO.Path.GetFileName(path)}' не имеет вида "
                 + $"{{baseIndex:D{LogSegmentFormat.FileNameDigits}}}{LogSegmentFormat.FileNameSuffix} (§7).");
         }
@@ -357,6 +358,7 @@ public sealed class SegmentReader : IAsyncDisposable
         if (fileNameIndex != header.Header!.BaseIndex)
         {
             return SegmentOpenResult.Corrupt(
+                file.Length,
                 $"baseIndex заголовка {header.Header.BaseIndex} не совпадает с именем файла "
                 + $"'{System.IO.Path.GetFileName(path)}' ({fileNameIndex}): §9.1 правило 3.");
         }

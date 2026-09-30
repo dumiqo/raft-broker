@@ -14,10 +14,11 @@ namespace RaftBroker.Storage.Log;
 /// </remarks>
 public readonly struct SegmentOpenResult
 {
-    private SegmentOpenResult(LogReadStatus status, SegmentReader? reader, string reason)
+    private SegmentOpenResult(LogReadStatus status, SegmentReader? reader, long length, string reason)
     {
         Status = status;
         Reader = reader;
+        Length = length;
         Reason = reason;
     }
 
@@ -30,6 +31,16 @@ public readonly struct SegmentOpenResult
     /// </remarks>
     public SegmentReader? Reader { get; }
 
+    /// <summary>
+    /// Длина файла на момент открытия - даже тогда, когда сегмент открыть не удалось.
+    /// </summary>
+    /// <remarks>
+    /// Нужна отчёту о восстановлении (<c>S1-T05</c>): удаляя оборванное создание (§9.3), он
+    /// сообщает, сколько байт было отброшено, а повторно открывать файл ради размера незачем -
+    /// он всё равно только что был открыт.
+    /// </remarks>
+    public long Length { get; }
+
     /// <summary>Причина отказа; пустая строка при успехе.</summary>
     public string Reason { get; }
 
@@ -39,15 +50,17 @@ public readonly struct SegmentOpenResult
     /// <summary>Сегмент открыт.</summary>
     /// <param name="reader">Читатель сегмента.</param>
     internal static SegmentOpenResult Success(SegmentReader reader)
-        => new(LogReadStatus.Success, reader, string.Empty);
+        => new(LogReadStatus.Success, reader, reader.Length, string.Empty);
 
     /// <summary>Файл короче заголовка.</summary>
+    /// <param name="length">Длина файла.</param>
     /// <param name="reason">Причина.</param>
-    internal static SegmentOpenResult Truncated(string reason)
-        => new(LogReadStatus.Truncated, null, reason);
+    internal static SegmentOpenResult Truncated(long length, string reason)
+        => new(LogReadStatus.Truncated, null, length, reason);
 
     /// <summary>Заголовок есть целиком, но нарушает формат или не совпадает с именем файла.</summary>
+    /// <param name="length">Длина файла.</param>
     /// <param name="reason">Причина.</param>
-    internal static SegmentOpenResult Corrupt(string reason)
-        => new(LogReadStatus.Corrupt, null, reason);
+    internal static SegmentOpenResult Corrupt(long length, string reason)
+        => new(LogReadStatus.Corrupt, null, length, reason);
 }

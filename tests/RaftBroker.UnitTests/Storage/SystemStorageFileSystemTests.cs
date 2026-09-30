@@ -9,6 +9,7 @@ namespace RaftBroker.UnitTests.Storage;
 /// <summary>
 /// S1-T03: рантайм-реализация файловой системы и сквозная запись сегмента на настоящий диск.
 /// S1-T04: то же самое для чтения.
+/// S1-T05: то же самое для усечения, удаления и восстановления оборванного хвоста.
 /// </summary>
 /// <remarks>
 /// Дубль из <c>RaftBroker.TestKit</c> проверяет политики и порядок операций, но не то,
@@ -249,6 +250,120 @@ public sealed class SystemStorageFileSystemTests : IDisposable
         }
 
         forward.Should().Equal(LogTestData.Command(1));
+    }
+
+    [Fact]
+    public async Task TruncateAsync_ShrinksTheFileOnDisk()
+    {
+        var path = Path.Combine(_directory, "data.bin");
+        var fileSystem = SystemStorageFileSystem.Instance;
+
+        await using (var file = await fileSystem.CreateAsync(path, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1, 2, 3, 4, 5 }, CancellationToken.None);
+            await file.FlushToDiskAsync(CancellationToken.None);
+        }
+
+        await fileSystem.TruncateAsync(path, 3, CancellationToken.None);
+
+        // Усечение обязано быть видно на диске, а не только в открытом дескрипторе.
+        File.ReadAllBytes(path).Should().Equal(1, 2, 3);
+    }
+
+    [Fact]
+    public async Task TruncateAsync_ToALongerLength_ThrowsAndLeavesTheFileAlone()
+    {
+        var path = Path.Combine(_directory, "data.bin");
+        var fileSystem = SystemStorageFileSystem.Instance;
+
+        await using (var file = await fileSystem.CreateAsync(path, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1, 2 }, CancellationToken.None);
+            await file.FlushToDiskAsync(CancellationToken.None);
+        }
+
+        Func<Task> truncate = async () => await fileSystem.TruncateAsync(path, 5, CancellationToken.None);
+
+        await truncate.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        File.ReadAllBytes(path).Should().Equal(1, 2);
+    }
+
+    [Fact]
+    public async Task TruncateAsync_OnAMissingFile_Throws()
+    {
+        var path = Path.Combine(_directory, "absent.bin");
+
+        Func<Task> truncate = async () => await SystemStorageFileSystem.Instance.TruncateAsync(path, 0, CancellationToken.None);
+
+        await truncate.Should().ThrowAsync<FileNotFoundException>();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_RemovesTheFileAndToleratesAnAlreadyMissingOne()
+    {
+        var path = Path.Combine(_directory, "data.bin");
+        var fileSystem = SystemStorageFileSystem.Instance;
+
+        await using (var file = await fileSystem.CreateAsync(path, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1 }, CancellationToken.None);
+        }
+
+        await fileSystem.DeleteAsync(path, CancellationToken.None);
+        File.Exists(path).Should().BeFalse();
+
+        // Повторный старт после падения между решением об удалении и самим удалением не должен падать.
+        Func<Task> deleteAgain = async () => await fileSystem.DeleteAsync(path, CancellationToken.None);
+
+        await deleteAgain.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task SegmentRecovery_OnRealFileSystem_TruncatesTheTornTailOnDisk()
+    {
+        var options = new SegmentWriterOptions
+        {
+            Directory = _directory,
+            MaxSegmentSize = LogSegmentFormat.MaxSegmentSize,
+        };
+
+        await using (var writer = new SegmentWriter(
+            SystemStorageFileSystem.Instance,
+            new TestClock(startMs: LogTestData.MonotonicStartMs, unixTimeMs: LogTestData.NowMs),
+            options))
+        {
+            await writer.AppendAsync(
+                [LogTestData.Command(1), LogTestData.Command(2), LogTestData.Command(3)],
+                CancellationToken.None);
+        }
+
+        var segmentPath = Path.Combine(_directory, LogSegmentFormat.GetFileName(new LogIndex(1)));
+        var thirdFrameOffset = LogSegmentFormat.HeaderSize + (2 * LogFrameCodec.GetFrameSize(4));
+
+        // Обрыв ровно так, как его оставляет упавший процесс: файл оборван внутри третьего фрейма.
+        using (var stream = new FileStream(segmentPath, FileMode.Open, FileAccess.Write))
+        {
+            stream.SetLength(thirdFrameOffset + 10);
+        }
+
+        var recovery = await SegmentRecovery.RecoverAsync(
+            SystemStorageFileSystem.Instance,
+            segmentPath,
+            SegmentKind.Last,
+            CancellationToken.None);
+
+        recovery.Status.Should().Be(SegmentRecoveryStatus.TruncatedTail);
+        recovery.DroppedBytes.Should().Be(10);
+        new FileInfo(segmentPath).Length.Should().Be(thirdFrameOffset);
+
+        var open = await SegmentReader.OpenAsync(SystemStorageFileSystem.Instance, segmentPath, CancellationToken.None);
+        open.IsSuccess.Should().BeTrue(open.Reason);
+        await using var reader = open.Reader!;
+        var scan = await reader.ScanAsync(CancellationToken.None);
+
+        scan.IsComplete.Should().BeTrue(scan.Reason);
+        scan.FrameCount.Should().Be(2);
+        scan.LastIndex!.Value.Value.Should().Be(2);
     }
 
     public void Dispose()

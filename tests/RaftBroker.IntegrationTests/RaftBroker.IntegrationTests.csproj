@@ -21,6 +21,10 @@
     <ProjectReference Include="../../src/RaftBroker.Server/RaftBroker.Server.csproj" />
     <ProjectReference Include="../../src/RaftBroker.Client/RaftBroker.Client.csproj" />
     <ProjectReference Include="../RaftBroker.TestKit/RaftBroker.TestKit.csproj" />
+
+    <!-- Жертва краш-тестов (S1-T05): сборка нужна не для кода, а чтобы родительский тест
+         нашёл её в своём каталоге вывода и сборка шла в правильном порядке. -->
+    <ProjectReference Include="../RaftBroker.CrashHarness/RaftBroker.CrashHarness.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net8.0": {
+      "raftbroker.core": {
+        "type": "Project"
+      },
+      "raftbroker.storage": {
+        "type": "Project",
+        "dependencies": {
+          "RaftBroker.Core": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}
