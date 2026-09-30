@@ -17,8 +17,6 @@
       поэтому TFM решения остаётся net8.0, а не подтягивается до net10.0.
 
     Ждёт своей задачи (специально не пришпилено):
-    - FsCheck - решение принято ADR `docs/adr/0001-test-stack.md` на S0-T03, но пакет
-      подключается в задаче первого настоящего property-теста (S1-T02).
     - OpenTelemetry (экспорт Prometheus/OTLP) - S7.
     - Testcontainers - S8.
     - пакет для CRC32C под WAL не подключается: решение S1-T01 (ADR `docs/adr/0003-log-segment-format.md`) -
@@ -55,6 +53,12 @@
   <ItemGroup>
     <PackageVersion Include="AwesomeAssertions" Version="9.6.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
+
+    <!-- Property-тесты. Версия проверена пробой на SDK 10 (S1-T02): FsCheck.Xunit.v3 3.4.0
+         требует xunit.v3.extensibility.core [4.0.0, 5.0.0) и уживается с xunit.v3 4.0.1,
+         поэтому visualstudio-раннер и Microsoft.NET.Test.Sdk не нужны и здесь. -->
+    <PackageVersion Include="FsCheck" Version="3.4.0" />
+    <PackageVersion Include="FsCheck.Xunit.v3" Version="3.4.0" />
   </ItemGroup>
 
   <!-- Бенчмарки: этап S8. -->
