@@ -36,19 +36,43 @@ public sealed class TestClock : CoreClock
     private long _sequence;
     private bool _isAdvancing;
 
-    /// <summary>Создаёт часы, стоящие на <paramref name="startMs"/>.</summary>
-    public TestClock(long startMs = 0)
+    /// <summary>Создаёт часы, стоящие на <paramref name="startMs"/> монотонного времени и <paramref name="unixTimeMs"/> настенного.</summary>
+    public TestClock(long startMs = 0, long unixTimeMs = 0)
     {
         if (startMs < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(startMs), startMs, "Начальное время не может быть отрицательным.");
         }
 
+        if (unixTimeMs < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(unixTimeMs), unixTimeMs, "Unix-время не может быть отрицательным.");
+        }
+
         TimestampMs = startMs;
+        UnixTimeMs = unixTimeMs;
     }
 
     /// <inheritdoc />
     public long TimestampMs { get; private set; }
+
+    /// <summary>
+    /// Настенное время в миллисекундах Unix. Живёт отдельно от <see cref="TimestampMs"/>:
+    /// продвижение монотонного времени не меняет настенное, как и в реальности, где
+    /// перевод часов и монотонный счётчик независимы.
+    /// </summary>
+    public long UnixTimeMs { get; private set; }
+
+    /// <summary>Задаёт настенное время; для монотонного времени - <see cref="Advance"/> и <see cref="AdvanceTo"/>.</summary>
+    public void SetUnixTimeMs(long unixTimeMs)
+    {
+        if (unixTimeMs < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(unixTimeMs), unixTimeMs, "Unix-время не может быть отрицательным.");
+        }
+
+        UnixTimeMs = unixTimeMs;
+    }
 
     /// <summary>Сколько таймеров ещё ждёт срабатывания.</summary>
     public int PendingTimerCount => _timers.Count(timer => timer.IsActive);

@@ -35,8 +35,11 @@ public sealed class LayerReferenceTests
         ["RaftBroker.Server"] = 4,
         ["RaftBroker.Cli"] = 5,
 
-        // tests: тестовый проект вправе ссылаться на что угодно из src.
-        ["RaftBroker.TestKit"] = 1,
+        // tests: тестовый проект вправе ссылаться на что угодно из src. TestKit стоит на 99,
+        // а не на 1: с S1-T03 он несёт ненадёжное хранилище (FakeStorageFileSystem) и
+        // обязан ссылаться на RaftBroker.Storage, то есть стоять выше всех боевых слоёв.
+        // Но и ниже тестовых проектов (100): они ссылаются на TestKit - строго вниз.
+        ["RaftBroker.TestKit"] = 99,
         ["RaftBroker.UnitTests"] = 100,
         ["RaftBroker.IntegrationTests"] = 100,
         ["RaftBroker.SimulationTests"] = 100,

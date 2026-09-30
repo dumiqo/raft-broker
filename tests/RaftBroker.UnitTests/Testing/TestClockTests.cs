@@ -198,6 +198,38 @@ public sealed class TestClockTests
     }
 
     [Fact]
+    public void WallClock_IsIndependentOfMonotonicTime()
+    {
+        var clock = new TestClock(startMs: 1_000, unixTimeMs: 1_700_000_000_000);
+
+        clock.TimestampMs.Should().Be(1_000);
+        clock.UnixTimeMs.Should().Be(1_700_000_000_000);
+
+        // Продвижение монотонного времени не трогает настенное: в реальности счётчик
+        // тиков и календарь тоже независимы.
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        clock.TimestampMs.Should().Be(6_000);
+        clock.UnixTimeMs.Should().Be(1_700_000_000_000);
+
+        clock.SetUnixTimeMs(1_600_000_000_000);
+
+        clock.TimestampMs.Should().Be(6_000);
+        clock.UnixTimeMs.Should().Be(1_600_000_000_000);
+    }
+
+    [Fact]
+    public void WallClock_RejectsNegativeValues()
+    {
+        Func<TestClock> create = () => new TestClock(unixTimeMs: -1);
+        create.Should().Throw<ArgumentOutOfRangeException>();
+
+        var clock = new TestClock();
+        Action set = () => clock.SetUnixTimeMs(-1);
+        set.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
     public void InactiveTimers_DoNotAccumulate()
     {
         var clock = new TestClock();

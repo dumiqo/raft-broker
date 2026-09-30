@@ -7,6 +7,8 @@ namespace RaftBroker.Core.Time;
 /// <see cref="TimestampMs"/> берётся из <see cref="Environment.TickCount64"/> (монотонные
 /// миллисекунды с запуска системы), а не из настенных часов: сдвиг системных часов не должен
 /// приводить к тому, что таймаут выборов "уже прошёл" или "никогда не пройдёт".
+/// <see cref="UnixTimeMs"/> даёт наоборот настенное время: у метода таймаута и у
+/// информационной метки создания сегмента разные требования к времени.
 /// </remarks>
 public sealed class SystemClock : IClock
 {
@@ -15,6 +17,9 @@ public sealed class SystemClock : IClock
 
     /// <inheritdoc />
     public long TimestampMs => Environment.TickCount64;
+
+    /// <inheritdoc />
+    public long UnixTimeMs => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     /// <inheritdoc />
     public ITimer Schedule(TimeSpan delay, Action callback)

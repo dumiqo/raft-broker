@@ -1,3 +1,6 @@
+using System.Globalization;
+using RaftBroker.Core.Primitives;
+
 namespace RaftBroker.Storage.Log;
 
 /// <summary>
@@ -43,6 +46,25 @@ public static class LogSegmentFormat
     /// <summary>Номинальный максимум размера сегмента: 64 МиБ.</summary>
     public const long MaxSegmentSize = 67_108_864;
 
+    /// <summary>Суффикс имени файла сегмента.</summary>
+    public const string FileNameSuffix = ".seg";
+
+    /// <summary>Число десятичных цифр в имени файла: постоянная длина и лексикографический порядок.</summary>
+    public const int FileNameDigits = 20;
+
     /// <summary>Магия файла сегмента. Версии в ней нет: версия живёт только в заголовке.</summary>
     public static ReadOnlySpan<byte> Magic => "RBSEGLOG"u8;
+
+    /// <summary>
+    /// Имя файла сегмента по индексу его первой записи: <c>{baseIndex:D20}.seg</c> (§7).
+    /// </summary>
+    /// <param name="baseIndex">Индекс первой записи сегмента.</param>
+    /// <returns>Имя файла без каталога.</returns>
+    /// <remarks>
+    /// Двадцать цифр выбраны так, чтобы длина имени была постоянной, а лексикографический
+    /// порядок имён совпадал с числовым (<see cref="long"/> занимает не больше 19 цифр).
+    /// Культура инвариантная: разделителей групп в имени быть не должно ни при каких настройках.
+    /// </remarks>
+    public static string GetFileName(LogIndex baseIndex)
+        => baseIndex.Value.ToString("D" + FileNameDigits, CultureInfo.InvariantCulture) + FileNameSuffix;
 }
