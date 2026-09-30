@@ -8,12 +8,13 @@ namespace RaftBroker.UnitTests.Storage;
 
 /// <summary>
 /// S1-T03: рантайм-реализация файловой системы и сквозная запись сегмента на настоящий диск.
+/// S1-T04: то же самое для чтения.
 /// </summary>
 /// <remarks>
 /// Дубль из <c>RaftBroker.TestKit</c> проверяет политики и порядок операций, но не то,
-/// что <see cref="SystemStorageFileSystem"/> действительно создаёт файл и fsync-ает его.
-/// Этот тест закрывает границу: он единственный в S1-T03 пишет на диск, и каталог
-/// создаётся во временном каталоге, а не в репозитории.
+/// что <see cref="SystemStorageFileSystem"/> действительно создаёт файл, fsync-ает его
+/// и читает его по смещению. Этот тест закрывает границу: он единственный в S1-T03 и S1-T04
+/// пишет на диск, и каталог создаётся во временном каталоге, а не в репозитории.
 /// </remarks>
 public sealed class SystemStorageFileSystemTests : IDisposable
 {
@@ -65,14 +66,14 @@ public sealed class SystemStorageFileSystemTests : IDisposable
 
         LogRecord[] records =
         [
-            SegmentWriterTestData.Command(1),
-            SegmentWriterTestData.Command(2),
-            SegmentWriterTestData.Command(3),
+            LogTestData.Command(1),
+            LogTestData.Command(2),
+            LogTestData.Command(3),
         ];
 
         await using (var writer = new SegmentWriter(
             SystemStorageFileSystem.Instance,
-            new TestClock(startMs: SegmentWriterTestData.MonotonicStartMs, unixTimeMs: SegmentWriterTestData.NowMs),
+            new TestClock(startMs: LogTestData.MonotonicStartMs, unixTimeMs: LogTestData.NowMs),
             options))
         {
             await writer.AppendAsync(records, CancellationToken.None);
@@ -85,6 +86,169 @@ public sealed class SystemStorageFileSystemTests : IDisposable
             Path.Combine(_directory, LogSegmentFormat.GetFileName(new LogIndex(3))));
 
         ReadAllRecords(segments).Should().Equal(records);
+    }
+
+    [Fact]
+    public async Task OpenReadAsync_ReturnsTheBytesWrittenEarlier()
+    {
+        var path = Path.Combine(_directory, LogSegmentFormat.GetFileName(new LogIndex(1)));
+
+        await using (var file = await SystemStorageFileSystem.Instance.CreateAsync(path, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1, 2, 3, 4, 5, 6 }, CancellationToken.None);
+        }
+
+        await using var readFile = await SystemStorageFileSystem.Instance.OpenReadAsync(path, CancellationToken.None);
+
+        readFile.Path.Should().Be(Path.GetFullPath(path));
+        readFile.Length.Should().Be(6);
+
+        // Адресация по смещению: позиция в потоке не переносится между вызовами.
+        var single = new byte[1];
+        (await readFile.ReadAsync(3, single, CancellationToken.None)).Should().Be(1);
+        single[0].Should().Be(4);
+
+        var rest = new byte[8];
+        (await readFile.ReadAsync(2, rest, CancellationToken.None)).Should().Be(4);
+        rest[..4].Should().Equal(3, 4, 5, 6);
+        (await readFile.ReadAsync(6, rest, CancellationToken.None)).Should().Be(0, "за концом файла чтение обязано возвращать 0, а не падать");
+    }
+
+    [Fact]
+    public async Task OpenReadAsync_MissingFile_Throws()
+    {
+        var path = Path.Combine(_directory, LogSegmentFormat.GetFileName(new LogIndex(1)));
+
+        Func<Task> open = async () => await SystemStorageFileSystem.Instance.OpenReadAsync(path, CancellationToken.None);
+
+        await open.Should().ThrowAsync<FileNotFoundException>();
+    }
+
+    [Fact]
+    public async Task OpenReadAsync_WhileTheWriterStillHoldsTheFile_ReadsTheDurablyWrittenBytes()
+    {
+        var options = new SegmentWriterOptions
+        {
+            Directory = _directory,
+            MaxSegmentSize = LogSegmentFormat.MaxSegmentSize,
+        };
+
+        var clock = new TestClock(
+            startMs: LogTestData.MonotonicStartMs,
+            unixTimeMs: LogTestData.NowMs);
+        var writer = new SegmentWriter(SystemStorageFileSystem.Instance, clock, options);
+        await using (writer)
+        {
+            await writer.AppendAsync([LogTestData.Command(1)], CancellationToken.None);
+            var path = writer.CurrentSegmentPath!;
+
+            // Последний сегмент остаётся открытым у писателя; читатель обязан его открыть
+            // (FileShare.ReadWrite) и увидеть то, что уже долговечно.
+            await using var reader = (await SegmentReader.OpenAsync(SystemStorageFileSystem.Instance, path, CancellationToken.None)).Reader!;
+
+            var scan = await reader.ScanAsync(CancellationToken.None);
+
+            scan.Status.Should().Be(SegmentScanStatus.Complete);
+            scan.LastIndex!.Value.Value.Should().Be(1);
+
+            await writer.AppendAsync([LogTestData.Command(2), LogTestData.Command(3)], CancellationToken.None);
+            await writer.FlushToDiskAsync(CancellationToken.None);
+
+            // Длина у читателя - снимок на момент открытия, но новый фрейм начинается
+            // за ней, поэтому он его не видит: перечитывать хвост - дело восстановления.
+            reader.Length.Should().Be(LogSegmentFormat.HeaderSize + LogFrameCodec.GetFrameSize(4));
+        }
+    }
+
+    [Fact]
+    public async Task SegmentReader_OnRealFileSystem_ReadsBackWhatTheWriterWrote()
+    {
+        var options = new SegmentWriterOptions
+        {
+            Directory = _directory,
+            MaxSegmentSize = LogSegmentFormat.MaxSegmentSize,
+        };
+
+        LogRecord[] records =
+        [
+            LogTestData.Command(1, term: 1),
+            LogTestData.Noop(2, term: 1),
+            LogTestData.Command(3, term: 2),
+        ];
+
+        string path;
+
+        var clock = new TestClock(
+            startMs: LogTestData.MonotonicStartMs,
+            unixTimeMs: LogTestData.NowMs);
+        await using (var writer = new SegmentWriter(SystemStorageFileSystem.Instance, clock, options))
+        {
+            await writer.AppendAsync(records, CancellationToken.None);
+            path = writer.CurrentSegmentPath!;
+        }
+
+        var open = await SegmentReader.OpenAsync(SystemStorageFileSystem.Instance, path, CancellationToken.None);
+        open.IsSuccess.Should().BeTrue(open.Reason);
+        await using var reader = open.Reader!;
+
+        var scan = await reader.ScanAsync(CancellationToken.None);
+        scan.Status.Should().Be(SegmentScanStatus.Complete);
+        reader.Header.CreatedAtUnixMs.Should().Be(LogTestData.NowMs);
+        (await reader.ReadAtAsync(new LogIndex(2), CancellationToken.None))!.Should().Be(records[1]);
+
+        var forward = new List<LogRecord>();
+
+        await foreach (var record in reader.ReadForwardAsync(CancellationToken.None))
+        {
+            forward.Add(record);
+        }
+
+        forward.Should().Equal(records);
+    }
+
+    [Fact]
+    public async Task SegmentReader_OnTruncatedRealFile_ReportsTailProblemAndKeepsTheValidPrefix()
+    {
+        var options = new SegmentWriterOptions
+        {
+            Directory = _directory,
+            MaxSegmentSize = LogSegmentFormat.MaxSegmentSize,
+        };
+
+        var clock = new TestClock(
+            startMs: LogTestData.MonotonicStartMs,
+            unixTimeMs: LogTestData.NowMs);
+        string path;
+
+        await using (var writer = new SegmentWriter(SystemStorageFileSystem.Instance, clock, options))
+        {
+            await writer.AppendAsync(
+                [LogTestData.Command(1), LogTestData.Command(2)],
+                CancellationToken.None);
+            path = writer.CurrentSegmentPath!;
+        }
+
+        // Обрыв хвоста без записи: именно так выглядит падение посреди дозаписи (§9.3).
+        using (var file = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        {
+            file.SetLength(file.Length - 2);
+        }
+
+        await using var reader = (await SegmentReader.OpenAsync(SystemStorageFileSystem.Instance, path, CancellationToken.None)).Reader!;
+        var scan = await reader.ScanAsync(CancellationToken.None);
+
+        scan.Status.Should().Be(SegmentScanStatus.TailProblem);
+        scan.FrameCount.Should().Be(1);
+        scan.ValidEndOffset.Should().Be(LogSegmentFormat.HeaderSize + LogFrameCodec.GetFrameSize(4));
+
+        var forward = new List<LogRecord>();
+
+        await foreach (var record in reader.ReadForwardAsync(CancellationToken.None))
+        {
+            forward.Add(record);
+        }
+
+        forward.Should().Equal(LogTestData.Command(1));
     }
 
     public void Dispose()
@@ -105,7 +269,7 @@ public sealed class SystemStorageFileSystemTests : IDisposable
 
             var header = SegmentHeaderCodec.Read(bytes);
             header.IsSuccess.Should().BeTrue(header.Reason);
-            header.Header!.CreatedAtUnixMs.Should().Be(SegmentWriterTestData.NowMs);
+            header.Header!.CreatedAtUnixMs.Should().Be(LogTestData.NowMs);
 
             var offset = LogSegmentFormat.HeaderSize;
 

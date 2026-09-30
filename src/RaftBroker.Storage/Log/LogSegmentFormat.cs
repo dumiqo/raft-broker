@@ -67,4 +67,53 @@ public static class LogSegmentFormat
     /// </remarks>
     public static string GetFileName(LogIndex baseIndex)
         => baseIndex.Value.ToString("D" + FileNameDigits, CultureInfo.InvariantCulture) + FileNameSuffix;
+
+    /// <summary>
+    /// Разбирает имя файла сегмента назад в индекс его первой записи (§7).
+    /// </summary>
+    /// <param name="fileName">Имя файла или путь: каталог отбрасывается.</param>
+    /// <param name="baseIndex">Индекс первой записи сегмента при успехе; иначе значение по умолчанию.</param>
+    /// <returns><c>true</c>, если имя имеет вид <c>{baseIndex:D20}.seg</c> и индекс не меньше единицы.</returns>
+    /// <remarks>
+    /// Разбор строгий: ровно <see cref="FileNameDigits"/> цифр и суффикс <see cref="FileNameSuffix"/>.
+    /// Свободная ширина не принимается намеренно - иначе два разных написания одного индекса дали бы
+    /// два имени, а §7 требует постоянной длины имени, чтобы лексикографический порядок каталога
+    /// совпадал с числовым (§9.5 шаг 2). Посторонний файл в каталоге лога - ошибка, и она обязана быть
+    /// видна здесь, а не превратиться в индекс.
+    /// </remarks>
+    public static bool TryParseFileName(string fileName, out LogIndex baseIndex)
+    {
+        baseIndex = default;
+
+        if (string.IsNullOrEmpty(fileName))
+        {
+            return false;
+        }
+
+        var name = Path.GetFileName(fileName.AsSpan());
+
+        if (name.Length != FileNameDigits + FileNameSuffix.Length
+            || !name.EndsWith(FileNameSuffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var digits = name[..FileNameDigits];
+
+        foreach (var symbol in digits)
+        {
+            if (!char.IsAsciiDigit(symbol))
+            {
+                return false;
+            }
+        }
+
+        if (!long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value < 1)
+        {
+            return false;
+        }
+
+        baseIndex = new LogIndex(value);
+        return true;
+    }
 }

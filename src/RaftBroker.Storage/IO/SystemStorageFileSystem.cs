@@ -46,6 +46,33 @@ public sealed class SystemStorageFileSystem : IStorageFileSystem
         return ValueTask.FromResult<IStorageFile>(new SystemStorageFile(fullPath, stream));
     }
 
+    /// <inheritdoc />
+    public ValueTask<IStorageReadFile> OpenReadAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var fullPath = Path.GetFullPath(path);
+
+        if (!File.Exists(fullPath))
+        {
+            throw new FileNotFoundException($"Файл '{fullPath}' не найден.", fullPath);
+        }
+
+        // FileShare.ReadWrite: писатель держит последний сегмент открытым на запись с
+        // FileShare.Read (см. CreateAsync), а читатели запечатанных сегментов обязаны
+        // открываться, пока он работает (§8 формата).
+        var stream = new FileStream(
+            fullPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            bufferSize: 4096,
+            FileOptions.Asynchronous);
+
+        return ValueTask.FromResult<IStorageReadFile>(new SystemStorageReadFile(fullPath, stream));
+    }
+
     /// <summary>Открытый <see cref="FileStream"/>; fsync - единственное, чего нет у <see cref="Stream"/>.</summary>
     private sealed class SystemStorageFile(string path, FileStream stream) : IStorageFile
     {
@@ -62,5 +89,37 @@ public sealed class SystemStorageFileSystem : IStorageFileSystem
         }
 
         public ValueTask DisposeAsync() => stream.DisposeAsync();
+    }
+
+    /// <summary>Открытый на чтение <see cref="FileStream"/> с абсолютной адресацией по смещению.</summary>
+    private sealed class SystemStorageReadFile : IStorageReadFile
+    {
+        private readonly FileStream _stream;
+
+        public SystemStorageReadFile(string path, FileStream stream)
+        {
+            _stream = stream;
+            Path = path;
+            Length = stream.Length;
+        }
+
+        public string Path { get; }
+
+        public long Length { get; }
+
+        public async ValueTask<int> ReadAsync(long offset, Memory<byte> destination, CancellationToken cancellationToken)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(offset);
+
+            if (offset >= Length)
+            {
+                return 0;
+            }
+
+            _stream.Position = offset;
+            return await _stream.ReadAsync(destination, cancellationToken).ConfigureAwait(false);
+        }
+
+        public ValueTask DisposeAsync() => _stream.DisposeAsync();
     }
 }

@@ -6,9 +6,14 @@ using RaftBroker.TestKit.Time;
 namespace RaftBroker.UnitTests.Storage;
 
 /// <summary>
-/// Общие построения тестов писателя сегментов (S1-T03): часы, каталог, записи и чтение назад.
+/// Общие построения тестов журнала (S1-T03, S1-T04): часы, каталог, записи,
+/// запись сегмента и чтение его назад.
 /// </summary>
-internal static class SegmentWriterTestData
+/// <remarks>
+/// Файл должен оставаться общим для писателя и читателя: если каждый заведёт свой способ
+/// ставить байты на диск, разъехавшуюся раскладку перестанет ловить хоть один тест.
+/// </remarks>
+internal static class LogTestData
 {
     /// <summary>Каталог в настройках: файловая система поддельная, на диск ничего не попадает.</summary>
     internal const string Directory = "log";
@@ -54,6 +59,25 @@ internal static class SegmentWriterTestData
 
     internal static LogRecord Noop(long index, long term = 1)
         => LogRecord.Noop(new LogIndex(index), new Term(term));
+
+    /// <summary>Записывает записи в один сегмент и возвращает путь этого сегмента.</summary>
+    internal static async Task<string> WriteSegmentAsync(FakeStorageFileSystem fileSystem, params LogRecord[] records)
+    {
+        var writer = CreateWriter(fileSystem);
+        await using (writer)
+        {
+            await writer.AppendAsync(records, CancellationToken.None);
+            return writer.CurrentSegmentPath!;
+        }
+    }
+
+    /// <summary>Содержимое файла с одним заголовком и ни одним фреймом: пустой сегмент (§8).</summary>
+    internal static byte[] HeaderOnlySegment(long baseIndex)
+    {
+        var buffer = new byte[LogSegmentFormat.HeaderSize];
+        SegmentHeaderCodec.Write(buffer, new SegmentHeader(new LogIndex(baseIndex), NowMs));
+        return buffer;
+    }
 
     /// <summary>Читает сегмент теми же кодеками, что и боевой код (S1-T02): writer и reader не должны разъехаться.</summary>
     internal static List<LogRecord> ReadSegment(FakeStorageFileSystem fileSystem, long baseIndex)

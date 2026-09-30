@@ -26,11 +26,11 @@ public sealed class SegmentWriterTests
     public async Task FirstAppend_CreatesSegmentNamedAfterFirstRecord()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
-        await writer.AppendAsync([SegmentWriterTestData.Command(1)], CancellationToken.None);
+        await writer.AppendAsync([LogTestData.Command(1)], CancellationToken.None);
 
-        fileSystem.Paths.Should().Equal(SegmentWriterTestData.SegmentPath(1));
+        fileSystem.Paths.Should().Equal(LogTestData.SegmentPath(1));
         writer.LastIndex!.Value.Value.Should().Be(1);
         writer.LastTerm!.Value.Value.Should().Be(1);
         writer.CurrentSegmentSize.Should().Be(LogSegmentFormat.HeaderSize + CommandFrameSize);
@@ -40,44 +40,44 @@ public sealed class SegmentWriterTests
     public async Task FirstSegment_MayStartAfterOneWhenRecoveryBeginsFromSnapshot()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
-        await writer.AppendAsync([SegmentWriterTestData.Command(5)], CancellationToken.None);
+        await writer.AppendAsync([LogTestData.Command(5)], CancellationToken.None);
 
-        fileSystem.Paths.Should().Equal(SegmentWriterTestData.SegmentPath(5));
+        fileSystem.Paths.Should().Equal(LogTestData.SegmentPath(5));
 
-        var header = SegmentHeaderCodec.Read(fileSystem.ReadAllBytes(SegmentWriterTestData.SegmentPath(5)));
+        var header = SegmentHeaderCodec.Read(fileSystem.ReadAllBytes(LogTestData.SegmentPath(5)));
         header.IsSuccess.Should().BeTrue(header.Reason);
         header.Header!.BaseIndex.Value.Should().Be(5);
-        header.Header.CreatedAtUnixMs.Should().Be(SegmentWriterTestData.NowMs);
+        header.Header.CreatedAtUnixMs.Should().Be(LogTestData.NowMs);
     }
 
     [Fact]
     public async Task SegmentHeader_TakesTheTimestampFromUnixTimeNotFromTheMonotonicCounter()
     {
         var fileSystem = new FakeStorageFileSystem();
-        var clock = new TestClock(startMs: SegmentWriterTestData.MonotonicStartMs, unixTimeMs: SegmentWriterTestData.NowMs);
+        var clock = new TestClock(startMs: LogTestData.MonotonicStartMs, unixTimeMs: LogTestData.NowMs);
         await using var writer = new SegmentWriter(
             fileSystem,
             clock,
-            new SegmentWriterOptions { Directory = SegmentWriterTestData.Directory });
+            new SegmentWriterOptions { Directory = LogTestData.Directory });
 
-        await writer.AppendAsync([SegmentWriterTestData.Command(1)], CancellationToken.None);
+        await writer.AppendAsync([LogTestData.Command(1)], CancellationToken.None);
 
         // Формат требует Unix-мс (§3), а не монотонные мс процесса: это разные значения IClock.
-        var header = SegmentHeaderCodec.Read(fileSystem.ReadAllBytes(SegmentWriterTestData.SegmentPath(1)));
+        var header = SegmentHeaderCodec.Read(fileSystem.ReadAllBytes(LogTestData.SegmentPath(1)));
         header.IsSuccess.Should().BeTrue(header.Reason);
-        header.Header!.CreatedAtUnixMs.Should().Be(SegmentWriterTestData.NowMs);
-        clock.TimestampMs.Should().Be(SegmentWriterTestData.MonotonicStartMs);
+        header.Header!.CreatedAtUnixMs.Should().Be(LogTestData.NowMs);
+        clock.TimestampMs.Should().Be(LogTestData.MonotonicStartMs);
     }
 
     [Fact]
     public async Task Append_WritesHeaderThenFrame_WithFsyncBeforeTheFrame()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
-        await writer.AppendAsync([SegmentWriterTestData.Command(1)], CancellationToken.None);
+        await writer.AppendAsync([LogTestData.Command(1)], CancellationToken.None);
 
         // §9.3: заголовок нового сегмента попадает на устройство раньше первого фрейма,
         // иначе сегмент с нечитаемым заголовком мог бы содержать подтверждённые записи.
@@ -97,28 +97,28 @@ public sealed class SegmentWriterTests
     public async Task Append_WritesRecordsThatReadBackUnchanged()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
         LogRecord[] records =
         [
-            SegmentWriterTestData.Command(1),
-            SegmentWriterTestData.Noop(2, term: 2),
-            SegmentWriterTestData.Command(3, term: 2, payloadLength: 0),
+            LogTestData.Command(1),
+            LogTestData.Noop(2, term: 2),
+            LogTestData.Command(3, term: 2, payloadLength: 0),
         ];
 
         await writer.AppendAsync(records, CancellationToken.None);
 
-        SegmentWriterTestData.ReadSegment(fileSystem, 1).Should().Equal(records);
+        LogTestData.ReadSegment(fileSystem, 1).Should().Equal(records);
     }
 
     [Fact]
     public async Task Append_RejectsAGapInTheBatchBeforeWritingAnything()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
         Func<Task> append = async () => await writer.AppendAsync(
-            [SegmentWriterTestData.Command(2), SegmentWriterTestData.Command(4)],
+            [LogTestData.Command(2), LogTestData.Command(4)],
             CancellationToken.None);
 
         await append.Should().ThrowAsync<InvalidOperationException>();
@@ -129,12 +129,12 @@ public sealed class SegmentWriterTests
     public async Task Append_RejectsAGapBetweenCalls()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
-        await writer.AppendAsync([SegmentWriterTestData.Command(1)], CancellationToken.None);
+        await writer.AppendAsync([LogTestData.Command(1)], CancellationToken.None);
         var operationsAfterFirstAppend = fileSystem.Operations.Count;
 
-        Func<Task> append = async () => await writer.AppendAsync([SegmentWriterTestData.Command(3)], CancellationToken.None);
+        Func<Task> append = async () => await writer.AppendAsync([LogTestData.Command(3)], CancellationToken.None);
 
         await append.Should().ThrowAsync<InvalidOperationException>();
         fileSystem.Operations.Should().HaveCount(operationsAfterFirstAppend);
@@ -144,10 +144,10 @@ public sealed class SegmentWriterTests
     public async Task Append_RejectsARepeatedIndex()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
         Func<Task> append = async () => await writer.AppendAsync(
-            [SegmentWriterTestData.Command(2), SegmentWriterTestData.Command(2)],
+            [LogTestData.Command(2), LogTestData.Command(2)],
             CancellationToken.None);
 
         await append.Should().ThrowAsync<InvalidOperationException>();
@@ -158,10 +158,10 @@ public sealed class SegmentWriterTests
     public async Task Append_RejectsADecreasingTerm()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
         Func<Task> append = async () => await writer.AppendAsync(
-            [SegmentWriterTestData.Command(1, term: 5), SegmentWriterTestData.Command(2, term: 4)],
+            [LogTestData.Command(1, term: 5), LogTestData.Command(2, term: 4)],
             CancellationToken.None);
 
         await append.Should().ThrowAsync<InvalidOperationException>();
@@ -172,29 +172,29 @@ public sealed class SegmentWriterTests
     public async Task Append_AllowsTheTermToStayEqual()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
         LogRecord[] records =
         [
-            SegmentWriterTestData.Command(1, term: 3),
-            SegmentWriterTestData.Noop(2, term: 3),
+            LogTestData.Command(1, term: 3),
+            LogTestData.Noop(2, term: 3),
         ];
 
         await writer.AppendAsync(records, CancellationToken.None);
 
-        SegmentWriterTestData.ReadSegment(fileSystem, 1).Should().Equal(records);
+        LogTestData.ReadSegment(fileSystem, 1).Should().Equal(records);
     }
 
     [Fact]
     public async Task Append_RejectsAFrameBiggerThanTheWholeSegment()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(
+        await using var writer = LogTestData.CreateWriter(
             fileSystem,
             maxSegmentSize: LogSegmentFormat.FrameOverhead);
 
         Func<Task> append = async () => await writer.AppendAsync(
-            [SegmentWriterTestData.Command(1, payloadLength: 1)],
+            [LogTestData.Command(1, payloadLength: 1)],
             CancellationToken.None);
 
         await append.Should().ThrowAsync<InvalidOperationException>();
@@ -205,12 +205,12 @@ public sealed class SegmentWriterTests
     public async Task Append_WithAnAlreadyCancelledToken_WritesNothing()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
 
-        Func<Task> append = async () => await writer.AppendAsync([SegmentWriterTestData.Command(1)], cancellation.Token);
+        Func<Task> append = async () => await writer.AppendAsync([LogTestData.Command(1)], cancellation.Token);
 
         await append.Should().ThrowAsync<OperationCanceledException>();
         fileSystem.Operations.Should().BeEmpty();
@@ -220,7 +220,7 @@ public sealed class SegmentWriterTests
     public async Task EmptyAppend_DoesNotCreateASegment()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        await using var writer = LogTestData.CreateWriter(fileSystem);
 
         await writer.AppendAsync([], CancellationToken.None);
 
@@ -234,39 +234,39 @@ public sealed class SegmentWriterTests
     public async Task Rollover_SplitsSegmentsAtRecordBoundaries()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem, maxSegmentSize: TwoFrameSegment);
+        await using var writer = LogTestData.CreateWriter(fileSystem, maxSegmentSize: TwoFrameSegment);
 
         LogRecord[] records =
         [
-            SegmentWriterTestData.Command(1),
-            SegmentWriterTestData.Command(2),
-            SegmentWriterTestData.Command(3),
-            SegmentWriterTestData.Command(4),
+            LogTestData.Command(1),
+            LogTestData.Command(2),
+            LogTestData.Command(3),
+            LogTestData.Command(4),
         ];
 
         await writer.AppendAsync(records, CancellationToken.None);
 
         fileSystem.Paths.Should().Equal(
-            SegmentWriterTestData.SegmentPath(1),
-            SegmentWriterTestData.SegmentPath(3));
+            LogTestData.SegmentPath(1),
+            LogTestData.SegmentPath(3));
 
-        SegmentWriterTestData.ReadSegment(fileSystem, 1).Should().Equal(records[0], records[1]);
-        SegmentWriterTestData.ReadSegment(fileSystem, 3).Should().Equal(records[2], records[3]);
+        LogTestData.ReadSegment(fileSystem, 1).Should().Equal(records[0], records[1]);
+        LogTestData.ReadSegment(fileSystem, 3).Should().Equal(records[2], records[3]);
         writer.LastIndex!.Value.Value.Should().Be(4);
-        writer.CurrentSegmentPath.Should().Be(SegmentWriterTestData.SegmentPath(3));
+        writer.CurrentSegmentPath.Should().Be(LogTestData.SegmentPath(3));
     }
 
     [Fact]
     public async Task Rollover_SealsAndCreatesInTheDocumentedOrder()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem, maxSegmentSize: TwoFrameSegment);
+        await using var writer = LogTestData.CreateWriter(fileSystem, maxSegmentSize: TwoFrameSegment);
 
         await writer.AppendAsync(
             [
-                SegmentWriterTestData.Command(1),
-                SegmentWriterTestData.Command(2),
-                SegmentWriterTestData.Command(3),
+                LogTestData.Command(1),
+                LogTestData.Command(2),
+                LogTestData.Command(3),
             ],
             CancellationToken.None);
 
@@ -290,19 +290,19 @@ public sealed class SegmentWriterTests
     public async Task Rollover_KeepsEverySegmentWithinItsLimit()
     {
         var fileSystem = new FakeStorageFileSystem();
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem, maxSegmentSize: TwoFrameSegment);
+        await using var writer = LogTestData.CreateWriter(fileSystem, maxSegmentSize: TwoFrameSegment);
 
         await writer.AppendAsync(
             [
-                SegmentWriterTestData.Command(1),
-                SegmentWriterTestData.Command(2),
-                SegmentWriterTestData.Command(3),
-                SegmentWriterTestData.Command(4),
+                LogTestData.Command(1),
+                LogTestData.Command(2),
+                LogTestData.Command(3),
+                LogTestData.Command(4),
             ],
             CancellationToken.None);
 
-        fileSystem.ReadAllBytes(SegmentWriterTestData.SegmentPath(1)).Length.Should().BeLessThanOrEqualTo(TwoFrameSegment);
-        fileSystem.ReadAllBytes(SegmentWriterTestData.SegmentPath(3)).Length.Should().BeLessThanOrEqualTo(TwoFrameSegment);
+        fileSystem.ReadAllBytes(LogTestData.SegmentPath(1)).Length.Should().BeLessThanOrEqualTo(TwoFrameSegment);
+        fileSystem.ReadAllBytes(LogTestData.SegmentPath(3)).Length.Should().BeLessThanOrEqualTo(TwoFrameSegment);
         writer.CurrentSegmentSize.Should().BeLessThanOrEqualTo(TwoFrameSegment);
     }
 
@@ -313,18 +313,18 @@ public sealed class SegmentWriterTests
         // максимум: это не ошибка, а следствие двух правил формата.
         var fileSystem = new FakeStorageFileSystem();
         var maxSegmentSize = CommandFrameSize;
-        await using var writer = SegmentWriterTestData.CreateWriter(fileSystem, maxSegmentSize);
+        await using var writer = LogTestData.CreateWriter(fileSystem, maxSegmentSize);
 
         await writer.AppendAsync(
-            [SegmentWriterTestData.Command(1), SegmentWriterTestData.Command(2)],
+            [LogTestData.Command(1), LogTestData.Command(2)],
             CancellationToken.None);
 
         var singleFrameSegmentSize = LogSegmentFormat.HeaderSize + CommandFrameSize;
 
         fileSystem.Paths.Should().Equal(
-            SegmentWriterTestData.SegmentPath(1),
-            SegmentWriterTestData.SegmentPath(2));
-        fileSystem.ReadAllBytes(SegmentWriterTestData.SegmentPath(1)).Length.Should().Be(singleFrameSegmentSize);
+            LogTestData.SegmentPath(1),
+            LogTestData.SegmentPath(2));
+        fileSystem.ReadAllBytes(LogTestData.SegmentPath(1)).Length.Should().Be(singleFrameSegmentSize);
         writer.CurrentSegmentSize.Should().Be(singleFrameSegmentSize);
     }
 
@@ -332,10 +332,10 @@ public sealed class SegmentWriterTests
     public async Task Append_AfterDispose_Throws()
     {
         var fileSystem = new FakeStorageFileSystem();
-        var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        var writer = LogTestData.CreateWriter(fileSystem);
         await writer.DisposeAsync();
 
-        Func<Task> append = async () => await writer.AppendAsync([SegmentWriterTestData.Command(1)], CancellationToken.None);
+        Func<Task> append = async () => await writer.AppendAsync([LogTestData.Command(1)], CancellationToken.None);
 
         await append.Should().ThrowAsync<ObjectDisposedException>();
     }
@@ -344,7 +344,7 @@ public sealed class SegmentWriterTests
     public async Task Dispose_IsIdempotent()
     {
         var fileSystem = new FakeStorageFileSystem();
-        var writer = SegmentWriterTestData.CreateWriter(fileSystem);
+        var writer = LogTestData.CreateWriter(fileSystem);
 
         await writer.DisposeAsync();
         Func<Task> disposeAgain = async () => await writer.DisposeAsync();
@@ -370,7 +370,7 @@ public sealed class SegmentWriterTests
     {
         var fileSystem = new FakeStorageFileSystem();
 
-        Func<SegmentWriter> create = () => SegmentWriterTestData.CreateWriter(
+        Func<SegmentWriter> create = () => LogTestData.CreateWriter(
             fileSystem,
             maxSegmentSize: LogSegmentFormat.FrameOverhead - 1);
 
@@ -382,14 +382,14 @@ public sealed class SegmentWriterTests
     {
         var fileSystem = new FakeStorageFileSystem();
 
-        Func<SegmentWriter> create = () => SegmentWriterTestData.CreateWriter(
+        Func<SegmentWriter> create = () => LogTestData.CreateWriter(
             fileSystem,
             defaultMode: (DurabilityMode)99);
 
         create.Should().Throw<ArgumentOutOfRangeException>();
     }
 
-    private static string FileName(long baseIndex) => Path.GetFileName(SegmentWriterTestData.SegmentPath(baseIndex));
+    private static string FileName(long baseIndex) => Path.GetFileName(LogTestData.SegmentPath(baseIndex));
 
     private static (StorageOperationKind Kind, string Name)[] Summarize(FakeStorageFileSystem fileSystem)
         => [.. fileSystem.Operations.Select(operation => (operation.Kind, Path.GetFileName(operation.Path)))];
