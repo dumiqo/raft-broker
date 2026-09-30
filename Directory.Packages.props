@@ -21,7 +21,10 @@
       подключается в задаче первого настоящего property-теста (S1-T02).
     - OpenTelemetry (экспорт Prometheus/OTLP) - S7.
     - Testcontainers - S8.
-    - пакет для CRC32C под WAL - S1-T01 (в System.IO.Hashing CRC32C нет, только CRC32).
+    - пакет для CRC32C под WAL не подключается: решение S1-T01 (ADR `docs/adr/0003-log-segment-format.md`) -
+      своя реализация CRC-32C в `RaftBroker.Storage`. В `System.IO.Hashing` 9.0.0 типа `Crc32C` нет
+      (только `Crc32`, `Crc64` и `XxHash*` - проверено составом пакета), а ради 30 строк сторонняя
+      зависимость не нужна.
   -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
