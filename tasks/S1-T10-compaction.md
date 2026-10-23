@@ -1,7 +1,7 @@
 # S1-T10 - Компакция: обрезка лога до снапшота и согласованность пары (лог, снапшот)
 
 - Этап: S1 - Долговечный лог и снапшоты
-- Статус: done (`9f00000`-подобный хеш см. `tasks/README.md`; ADR `0013-compaction-order.md`)
+- Статус: done, `5e017c1` (ADR `0013-compaction-order.md`)
 - Зависит от: `S1-T06` (`LogStore`), `S1-T09` (`SnapshotStore`)
 - Спецификация этапа: `docs/stages/01 - Durable log and snapshots.md`
 - Гейт: `pwsh scripts/verify.ps1`
