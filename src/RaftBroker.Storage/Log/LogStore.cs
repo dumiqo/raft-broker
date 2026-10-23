@@ -82,12 +82,20 @@ public sealed class LogStore : ILogStore
     /// <para>
     /// Каталог разбирает <see cref="SegmentCatalog"/>: он же проверяет непрерывность и находит
     /// последний сегмент. Здесь добавляется только то, чего каталог не знает, - писатель,
-    /// продолженный на последнем сегменте (<see cref="SegmentWriter.ResumeAsync"/>).
+    /// продолженный на последнем сегменте (<see cref="SegmentWriter.ResumeAsync"/>), и ремонт
+    /// оборванного последнего сегмента (<c>S1-T07</c>).
     /// </para>
     /// <para>
-    /// Открытый читатель здесь не задерживается ни на одном пути, включая отказ: каталог
-    /// закрывает сегмент до возврата, поэтому проверка на утечку дескрипторов при
-    /// <see cref="LogReadStatus.Truncated"/> и <see cref="LogReadStatus.Corrupt"/> сводится
+    /// Ремонт - ровно один проход: <see cref="SegmentRecovery.RecoverAsync"/> получает последний
+    /// сегмент, после чего каталог читается заново. Перечитывание, а не переиспользование
+    /// частичного списка, потому что <see cref="SegmentCatalogResult.Truncated"/> его не несёт,
+    /// а удалённый файл меняет каталог целиком. Второй обрыв на перечитанном каталоге - уже
+    /// отказ: ремонт не помог, и повторять его значило бы терять байты вслепую (§9.4).
+    /// </para>
+    /// <para>
+    /// Открытый читатель здесь не задерживается ни на одном пути, включая отказ: и каталог,
+    /// и восстановление закрывают сегмент до возврата, поэтому проверка на утечку дескрипторов
+    /// при <see cref="LogReadStatus.Truncated"/> и <see cref="LogReadStatus.Corrupt"/> сводится
     /// к одному месту.
     /// </para>
     /// </remarks>
@@ -107,17 +115,44 @@ public sealed class LogStore : ILogStore
 
         options.Validate();
 
+        var repairs = new List<SegmentRecoveryResult>(1);
         var catalog = await SegmentCatalog.ReadAsync(fileSystem, options.Directory, cancellationToken).ConfigureAwait(false);
+
+        if (catalog.Status == LogReadStatus.Truncated)
+        {
+            var recovery = await SegmentRecovery.RecoverAsync(
+                fileSystem,
+                catalog.Path,
+                SegmentKind.Last,
+                cancellationToken).ConfigureAwait(false);
+
+            if (recovery.IsRefused)
+            {
+                return LogStoreOpenResult.Corrupt(recovery.Path, recovery.Reason);
+            }
+
+            repairs.Add(recovery);
+            catalog = await SegmentCatalog.ReadAsync(fileSystem, options.Directory, cancellationToken).ConfigureAwait(false);
+        }
 
         if (!catalog.IsSuccess)
         {
-            return catalog.Status == LogReadStatus.Truncated
-                ? LogStoreOpenResult.Truncated(catalog.Path, catalog.Reason)
-                : LogStoreOpenResult.Corrupt(catalog.Path, catalog.Reason);
+            // Сюда же попадает повторный обрыв после ремонта: второй проход значил бы терять
+            // байты вслепую, поэтому повторного восстановления нет (§9.4).
+            return LogStoreOpenResult.Corrupt(catalog.Path, catalog.Reason);
+        }
+
+        var entries = catalog.Entries;
+
+        if (TermBreaksMonotonicity(entries) is { } brokenPath)
+        {
+            return LogStoreOpenResult.Corrupt(
+                brokenPath,
+                "терм убывает на границе сегментов: терм вдоль журнала не убывает (§4), "
+                    + "и внутри одного файла это проверяет чтение, а стык файлов проверяет только старт.");
         }
 
         var store = new LogStore(fileSystem, clock, options);
-        var entries = catalog.Entries;
 
         foreach (var entry in entries)
         {
@@ -126,7 +161,7 @@ public sealed class LogStore : ILogStore
 
         if (entries.Count == 0)
         {
-            return LogStoreOpenResult.Success(store);
+            return LogStoreOpenResult.Success(store, LogRecoveryReport.For(repairs, store));
         }
 
         var last = entries[^1];
@@ -161,7 +196,33 @@ public sealed class LogStore : ILogStore
 
         store._observedCreatedSegments = store._writer.CreatedSegmentBaseIndexes.Count;
 
-        return LogStoreOpenResult.Success(store);
+        return LogStoreOpenResult.Success(store, LogRecoveryReport.For(repairs, store));
+    }
+
+    /// <summary>Ищет границу сегментов, где терм убывает; <c>null</c>, если терм не убывает нигде.</summary>
+    /// <remarks>
+    /// Сравниваются последние термы соседних сегментов. Это необходимое, но не достаточное
+    /// условие: до первой записи следующего сегмента его терм не виден, поэтому терм внутри
+    /// целого сегмента проверяет чтение (§4), а стык - только здесь. Пустой последний сегмент
+    /// терма не имеет и ничего к сравнению не добавляет (§8).
+    /// </remarks>
+    private static string? TermBreaksMonotonicity(IReadOnlyList<SegmentCatalogEntry> entries)
+    {
+        for (var position = 1; position < entries.Count; position++)
+        {
+            if (entries[position - 1].LastTerm is not { } previous
+                || entries[position].LastTerm is not { } current)
+            {
+                continue;
+            }
+
+            if (current < previous)
+            {
+                return entries[position].Path;
+            }
+        }
+
+        return null;
     }
 
     /// <inheritdoc />

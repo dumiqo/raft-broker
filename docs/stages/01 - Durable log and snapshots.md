@@ -144,6 +144,11 @@ public interface ISnapshotStore
 - В образе `mcr.microsoft.com/dotnet/sdk:10.0` рантайма 8 нет вовсе, а тестовому хосту под `net8.0` нужен именно `Microsoft.AspNetCore.App` 8.0, а не только базовый рантайм. Поэтому в `scripts/gate.Dockerfile` ставится `--runtime aspnetcore --channel 8.0`: с `--runtime dotnet` тесты падают с `You must install or update .NET` (код 150), не начав прогон. `DOTNET_ROLL_FORWARD` отвергнут: он подменил бы рантайм, а не добавил его.
 - В Windows PowerShell 5.1 `$PSScriptRoot` при связывании параметров ещё пуст: значение по умолчанию вида `$Dockerfile = (Join-Path $PSScriptRoot 'gate.Dockerfile')` валит скрипт ошибкой `Cannot bind argument to parameter 'Path' because it is an empty string`. Путь вычисляется после блока `param`.
 
+Гейт после `S1-T07` (2026-10-23): 440 тестов (было 433), 0 падений, 0 предупреждений, покрытие строк `src` 98.6% при пороге 98.5%, `dotnet format --verify-no-changes` чисто. Два факта по ходу:
+
+- `LogStore.OpenAsync` теперь сам чинит оборванный последний сегмент и возвращает `LogRecoveryReport` (`Repaired`, `DroppedBytes`, `RemovedSegments`, позиции), поэтому `LogReadStatus.Truncated` из открытия журнала больше не возвращается вовсе: исходов два - журнал открыт или порча. Решение и его границы - ADR `0010-startup-recovery.md`.
+- Терм на стыке сегментов проверяется сравнением последних термов соседних файлов: внутри сегмента это делает чтение (§4), а между файлами до этой задачи не проверял никто. Проверка необходимая, но не полная (первая запись следующего сегмента в сравнении не видна), и это записано в ADR, а не выдано за полную.
+
 ## Чек-лист ревью R1
 
 1. Формат зафиксирован так, что сторонний разработчик восстановит лог по документу, без чтения кода?

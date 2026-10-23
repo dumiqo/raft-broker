@@ -403,8 +403,10 @@ public sealed class LogStoreTests
     }
 
     [Fact]
-    public async Task OpenAsync_ReportsTruncatedLastSegmentWithoutHoldingReaders()
+    public async Task OpenAsync_RepairsATruncatedLastSegmentWithoutHoldingReaders()
     {
+        // Ремонт оборванного хвоста - дело старта (S1-T07): наружу журнал уже приходит целым,
+        // а не как статус «нужно восстановление». Отчёт при этом не молчит.
         var fileSystem = new FakeStorageFileSystem();
         await using (var store = await OpenAsync(fileSystem))
         {
@@ -416,9 +418,9 @@ public sealed class LogStoreTests
 
         var open = await LogStore.OpenAsync(fileSystem, Clock, Options(), CancellationToken.None);
 
-        open.Status.Should().Be(LogReadStatus.Truncated);
-        open.Store.Should().BeNull();
-        fileSystem.OpenReadFileCount.Should().Be(0);
+        open.IsSuccess.Should().BeTrue(open.Reason);
+        open.Report.Repaired.Should().BeTrue();
+        fileSystem.OpenReadFileCount.Should().Be(0, "восстановление не задерживает ни одного читателя");
     }
 
     [Fact]

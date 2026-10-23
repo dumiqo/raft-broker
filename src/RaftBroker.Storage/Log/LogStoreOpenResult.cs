@@ -18,12 +18,13 @@ namespace RaftBroker.Storage.Log;
 /// </remarks>
 public readonly struct LogStoreOpenResult
 {
-    private LogStoreOpenResult(LogReadStatus status, ILogStore? store, string path, string reason)
+    private LogStoreOpenResult(LogReadStatus status, ILogStore? store, string path, string reason, LogRecoveryReport report)
     {
         Status = status;
         Store = store;
         Path = path;
         Reason = reason;
+        Report = report;
     }
 
     /// <summary>Статус открытия.</summary>
@@ -42,23 +43,26 @@ public readonly struct LogStoreOpenResult
     /// <summary>Причина отказа; пустая строка при успехе.</summary>
     public string Reason { get; }
 
+    /// <summary>Что восстановление сделало с журналом на диске; нулевое значение при отказе.</summary>
+    /// <remarks>
+    /// Отчёт есть только у успешного открытия: при <see cref="LogReadStatus.Truncated"/> и
+    /// <see cref="LogReadStatus.Corrupt"/> восстанавливать нечего или нельзя, и причина лежит в
+    /// <see cref="Reason"/>. Так у вызывающего один источник ответа «почему не открылось».
+    /// </remarks>
+    public LogRecoveryReport Report { get; }
+
     /// <summary>Журнал открыт.</summary>
     public bool IsSuccess => Status == LogReadStatus.Success;
 
     /// <summary>Журнал открыт.</summary>
     /// <param name="store">Хранилище.</param>
-    internal static LogStoreOpenResult Success(ILogStore store)
-        => new(LogReadStatus.Success, store, string.Empty, string.Empty);
-
-    /// <summary>Файл журнала оборван: нужен шаг восстановления.</summary>
-    /// <param name="path">Путь файла.</param>
-    /// <param name="reason">Причина.</param>
-    internal static LogStoreOpenResult Truncated(string path, string reason)
-        => new(LogReadStatus.Truncated, null, path, reason);
+    /// <param name="report">Что восстановление сделало с журналом на диске.</param>
+    internal static LogStoreOpenResult Success(ILogStore store, LogRecoveryReport report)
+        => new(LogReadStatus.Success, store, string.Empty, string.Empty, report);
 
     /// <summary>Журнал нарушает формат: автоматическое исправление запрещено.</summary>
     /// <param name="path">Путь файла или каталога.</param>
     /// <param name="reason">Причина.</param>
     internal static LogStoreOpenResult Corrupt(string path, string reason)
-        => new(LogReadStatus.Corrupt, null, path, reason);
+        => new(LogReadStatus.Corrupt, null, path, reason, default);
 }
