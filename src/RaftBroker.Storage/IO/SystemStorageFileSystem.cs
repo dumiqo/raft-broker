@@ -186,6 +186,109 @@ public sealed class SystemStorageFileSystem : IStorageFileSystem
     }
 
     /// <inheritdoc />
+    public ValueTask RenameAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var source = Path.GetFullPath(sourcePath);
+        var destination = Path.GetFullPath(destinationPath);
+
+        if (!File.Exists(source))
+        {
+            throw new FileNotFoundException($"Файл '{source}' не найден.", source);
+        }
+
+        // overwrite: false - и семантика контракта, и атомарность: MoveFileEx без REPLACE_EXISTING
+        // и rename(2) с проверкой имени не оставляют окна, в котором целевого файла нет.
+        File.Move(source, destination, overwrite: false);
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public ValueTask FlushDirectoryAsync(string directory, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var fullPath = Path.GetFullPath(directory);
+
+        if (!Directory.Exists(fullPath))
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        TryFlushDirectory(fullPath);
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Пытается сбросить каталог; там, где платформа этого не умеет, молча ничего не делает.</summary>
+    /// <remarks>
+    /// <para>
+    /// Ветвления по ОС здесь нет намеренно (ADR <c>0008</c>): вызов <c>open</c>/<c>fsync</c>
+    /// из libc на Windows не разрешается вовсе, поэтому попытка заканчивается
+    /// <see cref="DllNotFoundException"/>, и это единственный признак «платформа не умеет».
+    /// На Windows сброс каталога не определён, а метаданные NTFS журналируются файловой
+    /// системой - эта разница записана в <c>docs/formats/snapshot.md</c> §7, а не спрятана в коде.
+    /// </para>
+    /// <para>
+    /// Отказ сброса не пробрасывается: к этому моменту файл уже переименован и цел, и падать
+    /// из-за отсутствия оптимизации долговечности значило бы запретить снапшоты на платформе,
+    /// которая просто не умеет их сбрасывать.
+    /// </para>
+    /// </remarks>
+    private static void TryFlushDirectory(string path)
+    {
+        var descriptor = -1;
+
+        try
+        {
+            descriptor = Posix.Open(path, Posix.OpenReadOnly);
+
+            if (descriptor < 0)
+            {
+                return;
+            }
+
+            _ = Posix.Fsync(descriptor);
+        }
+        catch (Exception exception) when (exception is DllNotFoundException or EntryPointNotFoundException)
+        {
+            // Платформа без libc (Windows): сбрасывать каталог нечем, см. remarks.
+        }
+        finally
+        {
+            if (descriptor >= 0)
+            {
+                _ = Posix.Close(descriptor);
+            }
+        }
+    }
+
+    /// <summary>Минимальный набор POSIX-вызовов для сброса каталога.</summary>
+    /// <remarks>
+    /// Только <c>open</c>/<c>fsync</c>/<c>close</c> и только здесь: платформенный код живёт
+    /// в <c>Storage/IO</c> и больше нигде (проверяет <c>PlatformBoundaryTests</c>).
+    /// </remarks>
+    private static class Posix
+    {
+        /// <summary>Флаг <c>O_RDONLY</c>: каталог открывается только на чтение.</summary>
+        internal const int OpenReadOnly = 0;
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "open", SetLastError = true)]
+        internal static extern int Open(string path, int flags);
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "fsync", SetLastError = true)]
+        internal static extern int Fsync(int descriptor);
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "close", SetLastError = true)]
+        internal static extern int Close(int descriptor);
+    }
+
+    /// <inheritdoc />
     public ValueTask DeleteAsync(string path, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

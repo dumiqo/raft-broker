@@ -1,8 +1,10 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using RaftBroker.Core.Primitives;
+using RaftBroker.Storage.Integrity;
 using RaftBroker.Storage.IO;
 using RaftBroker.Storage.Log;
+using RaftBroker.Storage.Snapshot;
 
 namespace RaftBroker.CrashHarness;
 
@@ -53,9 +55,15 @@ internal static class Program
                     directory,
                     ParseCount(headerBytes, nameof(headerBytes))),
 
+                ["snapshot-mid-write", var directory, var snapshotIndex, var stateBytes] => await WriteUnpublishedSnapshotAsync(
+                    directory,
+                    ParseCount(snapshotIndex, nameof(snapshotIndex)),
+                    ParseCount(stateBytes, nameof(stateBytes))),
+
                 _ => throw new ArgumentException(
                     "Использование: RaftBroker.CrashHarness torn-frame <каталог> <записей> <байтов фрейма> "
-                    + "| torn-header <каталог> <байтов заголовка>."),
+                    + "| torn-header <каталог> <байтов заголовка> "
+                    + "| snapshot-mid-write <каталог> <индекс> <байтов состояния>."),
             };
 
             Console.Out.WriteLine($"READY {path}");
@@ -136,6 +144,47 @@ internal static class Program
         var header = new byte[LogSegmentFormat.HeaderSize];
         SegmentHeaderCodec.Write(header, new SegmentHeader(new LogIndex(1), CreatedAtUnixMs));
         await file.WriteAsync(header.AsMemory(0, headerBytes), CancellationToken.None);
+        await file.FlushToDiskAsync(CancellationToken.None);
+
+        return path;
+    }
+
+    /// <summary>
+    /// Пишет снапшот до переименования: так выглядит смерть процесса между fsync временного
+    /// файла и публикацией (<c>S1-T09</c>, §7 формата снапшота).
+    /// </summary>
+    /// <remarks>
+    /// Заголовок и начало состояния попадают на устройство, но имя остаётся <c>.tmp</c>, то есть
+    /// снапшотом файл не считается. Родительский тест проверяет, что после смерти процесса
+    /// каталог не содержит снапшота вовсе, а осиротевший временный файл убирается при следующем
+    /// обращении к каталогу.
+    /// </remarks>
+    private static async Task<string> WriteUnpublishedSnapshotAsync(string directory, long snapshotIndex, int stateBytes)
+    {
+        if (snapshotIndex <= 0)
+        {
+            throw new ArgumentException("Индекс снапшота должен быть положительным.", nameof(snapshotIndex));
+        }
+
+        if (stateBytes < 0 || stateBytes > SnapshotFormat.MaxStateLength)
+        {
+            throw new ArgumentException("Длина состояния вне границ формата.", nameof(stateBytes));
+        }
+
+        var metadata = new SnapshotMetadata(new LogIndex(snapshotIndex), new Term(3));
+        var path = Path.GetFullPath(
+            Path.Combine(directory, SnapshotFormat.GetTempFileName(metadata.LastIncludedIndex)));
+
+        await using var file = await SystemStorageFileSystem.Instance.CreateAsync(path, CancellationToken.None);
+
+        var state = new byte[stateBytes];
+        var header = new byte[SnapshotFormat.HeaderSize];
+        SnapshotHeaderCodec.Encode(metadata, CreatedAtUnixMs, state.Length, Crc32C.Compute(state), header);
+
+        await file.WriteAsync(header, CancellationToken.None);
+        await file.WriteAsync(state, CancellationToken.None);
+
+        // Сброс тот же, что у хранилища: до переименования файл уже цел, но ещё не снапшот.
         await file.FlushToDiskAsync(CancellationToken.None);
 
         return path;

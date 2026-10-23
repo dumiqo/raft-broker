@@ -76,6 +76,40 @@ public interface IStorageFileSystem
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> больше текущей длины файла.</exception>
     ValueTask TruncateAsync(string path, long length, CancellationToken cancellationToken);
 
+    /// <summary>Переименовывает файл: публикация снапшота одной операцией.</summary>
+    /// <param name="sourcePath">Существующий файл.</param>
+    /// <param name="destinationPath">Новое имя; файла с таким именем быть не должно.</param>
+    /// <param name="cancellationToken">Отмена до переименования.</param>
+    /// <remarks>
+    /// Добавлено в <c>S1-T09</c>: снапшот публикуется переименованием временного файла, потому
+    /// что «удалить старый и создать новый» оставляет окно, в котором снапшота нет вовсе.
+    /// Переименование в пределах одной файловой системы атомарно на обеих целевых платформах
+    /// (<c>docs/adr/0012-snapshot-file-and-atomic-publication.md</c>).
+    /// <para>
+    /// Замена существующего файла запрещена: имена снапшотов уникальны по индексу, и тихая
+    /// замена означала бы потерю валидного снапшота из-за ошибки вызывающего.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="FileNotFoundException">Исходного файла нет.</exception>
+    /// <exception cref="IOException">Файл с целевым именем уже существует.</exception>
+    ValueTask RenameAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken);
+
+    /// <summary>Сбрасывает на устройство содержимое каталога: переименование переживает крах.</summary>
+    /// <param name="directory">Каталог; отсутствующий каталог - не ошибка.</param>
+    /// <param name="cancellationToken">Отмена до сброса.</param>
+    /// <remarks>
+    /// Добавлено в <c>S1-T09</c>: переименование меняет каталог, а не файл, и без сброса
+    /// каталога крах после <see cref="RenameAsync"/> может вернуть старое имя
+    /// (<c>docs/formats/snapshot.md</c> §7).
+    /// <para>
+    /// Операция <b>best-effort</b>: переносимой формы сброса каталога не существует, поэтому там,
+    /// где платформа её не умеет (Windows), вызов ничего не делает и не падает. Ветвления по ОС
+    /// в коде нет - это требование ADR <c>0008-supported-platforms.md</c>: ветка, исполняемая
+    /// на одной платформе из двух, не проверяется ни одним прогоном гейта.
+    /// </para>
+    /// </remarks>
+    ValueTask FlushDirectoryAsync(string directory, CancellationToken cancellationToken);
+
     /// <summary>Удаляет файл.</summary>
     /// <param name="path">Полный или относительный путь.</param>
     /// <param name="cancellationToken">Отмена до удаления файла.</param>

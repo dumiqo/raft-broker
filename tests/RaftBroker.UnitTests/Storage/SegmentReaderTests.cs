@@ -248,6 +248,30 @@ public sealed class SegmentReaderTests
     }
 
     [Fact]
+    public async Task ReadAt_WhenTheBytesChangedAfterTheScan_FailsInsteadOfReturningAGarbledRecord()
+    {
+        // Скан запомнил смещения валидных фреймов, а файл изменился под читателем: отдать
+        // запись, которую уже нельзя проверить по CRC, значило бы выдать порчу за данные.
+        var fileSystem = new FakeStorageFileSystem();
+        var path = await LogTestData.WriteSegmentAsync(
+            fileSystem,
+            LogTestData.Command(1),
+            LogTestData.Command(2));
+
+        var result = await SegmentReader.OpenAsync(fileSystem, path, CancellationToken.None);
+        await using var reader = result.Reader!;
+        await reader.ScanAsync(CancellationToken.None);
+
+        var bytes = fileSystem.ReadAllBytes(path);
+        bytes[^1] ^= 0xFF;
+        fileSystem.Seed(path, bytes);
+
+        Func<Task> read = async () => await reader.ReadAtAsync(new LogIndex(2), CancellationToken.None);
+
+        await read.Should().ThrowAsync<InvalidDataException>().WithMessage("*стал нечитаем*");
+    }
+
+    [Fact]
     public async Task Scan_TornTail_StopsAtTheFirstIncompleteFrame()
     {
         var fileSystem = new FakeStorageFileSystem();

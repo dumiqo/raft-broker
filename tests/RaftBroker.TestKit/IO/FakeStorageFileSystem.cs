@@ -22,6 +22,12 @@ public enum StorageOperationKind
 
     /// <summary>Удаление файла (S1-T05).</summary>
     Delete,
+
+    /// <summary>Переименование файла: публикация снапшота (S1-T09).</summary>
+    Rename,
+
+    /// <summary>Сброс каталога на устройство (S1-T09).</summary>
+    FlushDirectory,
 }
 
 /// <summary>Запись в журнале операций файловой системы: порядок операций и есть предмет проверки.</summary>
@@ -210,6 +216,38 @@ public sealed class FakeStorageFileSystem : IStorageFileSystem
     }
 
     /// <inheritdoc />
+    public ValueTask RenameAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Record(new StorageOperation(StorageOperationKind.Rename, sourcePath, destinationPath.Length));
+
+        if (!_files.TryGetValue(sourcePath, out var file))
+        {
+            throw new FileNotFoundException($"Файл '{sourcePath}' не создавался.", sourcePath);
+        }
+
+        if (_files.ContainsKey(destinationPath))
+        {
+            throw new IOException($"Файл '{destinationPath}' уже существует: переименование с заменой запрещено.");
+        }
+
+        _files.Remove(sourcePath);
+        file.Path = destinationPath;
+        _files.Add(destinationPath, file);
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public ValueTask FlushDirectoryAsync(string directory, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Record(new StorageOperation(StorageOperationKind.FlushDirectory, directory));
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public ValueTask DeleteAsync(string path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -266,7 +304,7 @@ internal sealed class FakeStorageFile(FakeStorageFileSystem owner, string path) 
 {
     private readonly List<byte> _content = [];
 
-    public string Path { get; } = path;
+    public string Path { get; internal set; } = path;
 
     /// <summary>Закрыт ли файл: писатель обязан закрывать сегмент при rollover.</summary>
     public bool IsDisposed { get; private set; }

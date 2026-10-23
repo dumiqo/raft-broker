@@ -22,6 +22,16 @@ public sealed class NodeIdTests
     }
 
     [Fact]
+    public void RejectsNullInsteadOfAnEmptyIdentifier()
+    {
+        // null приходит из конфига и с провода; он обязан падать здесь, а не превращаться
+        // в пустой идентификатор, неотличимый от отсутствующего.
+        var act = () => new NodeId(null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
     public void AcceptsTheMaximumLength()
     {
         var raw = new string('x', 128);

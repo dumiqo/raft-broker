@@ -242,6 +242,12 @@ public sealed class LogStoreConcurrencyTests : IDisposable
         public ValueTask DeleteAsync(string path, CancellationToken cancellationToken)
             => _inner.DeleteAsync(path, cancellationToken);
 
+        public ValueTask RenameAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken)
+            => _inner.RenameAsync(sourcePath, destinationPath, cancellationToken);
+
+        public ValueTask FlushDirectoryAsync(string directory, CancellationToken cancellationToken)
+            => _inner.FlushDirectoryAsync(directory, cancellationToken);
+
         private async ValueTask<IStorageFile> WrapAsync(ValueTask<IStorageFile> pending)
             => new GatedFile(await pending.ConfigureAwait(false), this);
 

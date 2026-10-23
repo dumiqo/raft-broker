@@ -509,6 +509,99 @@ public sealed class SystemStorageFileSystemTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task RenameAsync_MovesTheFileAndLeavesTheOldNameGone()
+    {
+        // Arrange
+        var source = Path.Combine(_directory, "snapshot-1.snap.tmp");
+        var destination = Path.Combine(_directory, "snapshot-1.snap");
+
+        await using (var file = await SystemStorageFileSystem.Instance.CreateAsync(source, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1, 2, 3 }, CancellationToken.None);
+            await file.FlushToDiskAsync(CancellationToken.None);
+        }
+
+        // Act
+        await SystemStorageFileSystem.Instance.RenameAsync(source, destination, CancellationToken.None);
+
+        // Assert
+        File.Exists(source).Should().BeFalse();
+        File.ReadAllBytes(destination).Should().Equal(1, 2, 3);
+    }
+
+    [Fact]
+    public async Task RenameAsync_OnAMissingFile_Throws()
+    {
+        var source = Path.Combine(_directory, "absent.snap.tmp");
+        var destination = Path.Combine(_directory, "absent.snap");
+
+        var rename = async () => await SystemStorageFileSystem.Instance.RenameAsync(
+            source,
+            destination,
+            CancellationToken.None);
+
+        await rename.Should().ThrowAsync<FileNotFoundException>();
+    }
+
+    [Fact]
+    public async Task RenameAsync_OnAnExistingDestination_ThrowsAndKeepsBothFiles()
+    {
+        // Arrange: замена запрещена - иначе ошибка вызывающего кода теряла бы валидный снапшот.
+        var source = Path.Combine(_directory, "source.bin");
+        var destination = Path.Combine(_directory, "destination.bin");
+
+        await WriteFileAsync(source, 1);
+        await WriteFileAsync(destination, 2);
+
+        var rename = async () => await SystemStorageFileSystem.Instance.RenameAsync(
+            source,
+            destination,
+            CancellationToken.None);
+
+        // Act / Assert
+        await rename.Should().ThrowAsync<IOException>();
+        File.ReadAllBytes(source).Should().Equal(1);
+        File.ReadAllBytes(destination).Should().Equal(2);
+    }
+
+    [Fact]
+    public async Task FlushDirectoryAsync_ToleratesAMissingDirectory()
+    {
+        // Каталога ещё нет - сбрасывать нечего, и это не ошибка: снапшот создаст его сам.
+        var missing = Path.Combine(_directory, "no-such-directory");
+
+        await SystemStorageFileSystem.Instance.FlushDirectoryAsync(missing, CancellationToken.None);
+
+        Directory.Exists(missing).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task FlushDirectoryAsync_OnAnExistingDirectory_DoesNotThrowOnAnyPlatform()
+    {
+        // На Windows сброс каталога не поддержан: операция обязана молча продолжиться (ADR 0012).
+        Directory.CreateDirectory(_directory);
+
+        await SystemStorageFileSystem.Instance.FlushDirectoryAsync(_directory, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task FlushDirectoryAsync_WithAnEmptyPath_Throws()
+    {
+        var flush = async () => await SystemStorageFileSystem.Instance.FlushDirectoryAsync(
+            " ",
+            CancellationToken.None);
+
+        await flush.Should().ThrowAsync<ArgumentException>();
+    }
+
+    private async Task WriteFileAsync(string path, byte value)
+    {
+        await using var file = await SystemStorageFileSystem.Instance.CreateAsync(path, CancellationToken.None);
+        await file.WriteAsync(new byte[] { value }, CancellationToken.None);
+        await file.FlushToDiskAsync(CancellationToken.None);
+    }
+
     private async ValueTask<ILogStore> OpenStoreAsync()
     {
         var open = await LogStore.OpenAsync(
