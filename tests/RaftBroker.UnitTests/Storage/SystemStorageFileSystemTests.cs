@@ -474,6 +474,33 @@ public sealed class SystemStorageFileSystemTests : IDisposable
         scan.LastIndex!.Value.Value.Should().Be(2);
     }
 
+    [Fact]
+    public async Task LogStore_OnRealFileSystem_TruncatesAndContinuesAfterTheWriterIsClosed()
+    {
+        // Единственный тест журнала на настоящем диске (S1-T11). Фейк не моделирует блокировки
+        // файлов, а на Windows удаление и усечение открытого файла отказывают - поэтому порядок
+        // "закрыть писателя, потом удалять" (ADR 0007) виден только здесь.
+        await using (var store = await OpenStoreAsync())
+        {
+            await store.AppendAsync(
+                [.. Enumerable.Range(1, 6).Select(index => LogTestData.Command(index))],
+                CancellationToken.None);
+
+            // Усечение до 4-го индекса: сегмент 5 удаляется целиком, сегмент 3 укорачивается.
+            await store.TruncateSuffixAsync(new LogIndex(4), CancellationToken.None);
+            await store.AppendAsync([LogTestData.Command(4)], CancellationToken.None);
+        }
+
+        SegmentFiles().Should().Equal(SegmentName(1), SegmentName(3));
+
+        // Повторное открытие читает то, что осталось на диске: заголовки, фреймы и непрерывность.
+        await using var reopened = await OpenStoreAsync();
+
+        (await reopened.ReadRangeAsync(new LogIndex(1), maxCount: 10, CancellationToken.None))
+            .Select(record => record.Index.Value)
+            .Should().Equal(1, 2, 3, 4);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory))
@@ -481,6 +508,27 @@ public sealed class SystemStorageFileSystemTests : IDisposable
             Directory.Delete(_directory, recursive: true);
         }
     }
+
+    private async ValueTask<ILogStore> OpenStoreAsync()
+    {
+        var open = await LogStore.OpenAsync(
+            SystemStorageFileSystem.Instance,
+            new TestClock(startMs: LogTestData.MonotonicStartMs, unixTimeMs: LogTestData.NowMs),
+            new SegmentWriterOptions { Directory = _directory, MaxSegmentSize = 100 },
+            CancellationToken.None);
+
+        open.IsSuccess.Should().BeTrue(open.Reason);
+
+        return open.Store!;
+    }
+
+    private List<string> SegmentFiles()
+        => [.. Directory.EnumerateFiles(_directory, "*.seg")
+            .Select(Path.GetFileName)
+            .Select(name => name!)
+            .Order(StringComparer.Ordinal)];
+
+    private static string SegmentName(long index) => LogSegmentFormat.GetFileName(new LogIndex(index));
 
     private static List<LogRecord> ReadAllRecords(IEnumerable<string> segments)
     {

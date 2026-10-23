@@ -62,7 +62,7 @@ public sealed class LayerReferenceTests
         "RaftBroker.Benchmarks",
     };
 
-    private static readonly string RepoRoot = FindRepoRoot();
+    internal static readonly string RepoRoot = FindRepoRoot();
 
     /// <summary>Все ссылки между проектами решения. Отдельный кейс на каждую ссылку - чтобы падение называло виновника.</summary>
     public static TheoryData<string, string> ProjectReferences
