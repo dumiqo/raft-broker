@@ -41,4 +41,18 @@ public interface IStorageFile : IAsyncDisposable
     /// </remarks>
     /// <param name="cancellationToken">Отмена до начала fsync.</param>
     ValueTask FlushToDiskAsync(CancellationToken cancellationToken);
+
+    /// <summary>Укорачивает открытый файл до указанной длины и сбрасывает изменение на устройство.</summary>
+    /// <param name="length">Новая длина файла; не больше текущей.</param>
+    /// <param name="cancellationToken">Отмена до изменения файла.</param>
+    /// <remarks>
+    /// Добавлено в <c>S1-T06</c>: незавершённая запись фрейма (ошибка ввода-вывода, отмена
+    /// посреди записи) оставляет в конце сегмента мусор, и писатель обязан вернуть файл к последней
+    /// целой границе. Иначе следующая запись допишется после мусора и сегмент перестанет читаться
+    /// (§9.4), а незаметный мусор в середине журнала - это молчаливая потеря данных.
+    /// Усечение идёт через собственный дескриптор, а не через <c>IStorageFileSystem.TruncateAsync</c>:
+    /// файл уже открыт писателем, и второй дескриптор на запись система не даст.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="length"/> больше текущей длины файла.</exception>
+    ValueTask TruncateAsync(long length, CancellationToken cancellationToken);
 }

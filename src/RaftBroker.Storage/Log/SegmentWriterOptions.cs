@@ -16,7 +16,9 @@ public sealed record SegmentWriterOptions
 
     /// <summary>
     /// Номинальный максимум размера сегмента в байтах. Значение по умолчанию - 64 МиБ
-    /// (ADR <c>0003-log-segment-format.md</c>).
+    /// (ADR <c>0003-log-segment-format.md</c>). Верхняя граница - <see cref="int.MaxValue"/>:
+    /// читатель хранит смещения фреймов в <c>int</c>, и сегмент длиннее 2 ГиБ дал бы отрицательные
+    /// смещения вместо порчи формата.
     /// </summary>
     public long MaxSegmentSize { get; init; } = LogSegmentFormat.MaxSegmentSize;
 
@@ -41,6 +43,14 @@ public sealed record SegmentWriterOptions
                 nameof(MaxSegmentSize),
                 MaxSegmentSize,
                 $"Максимум сегмента меньше минимального фрейма {LogSegmentFormat.FrameOverhead} байт: ни одну запись записать не удалось бы.");
+        }
+
+        if (MaxSegmentSize > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MaxSegmentSize),
+                MaxSegmentSize,
+                $"Максимум сегмента больше {int.MaxValue} байт: читатель адресует смещения фреймов 32-битным числом (S1-T04).");
         }
 
         if (!Enum.IsDefined(DefaultDurabilityMode))

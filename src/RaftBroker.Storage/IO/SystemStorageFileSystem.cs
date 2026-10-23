@@ -15,6 +15,15 @@ namespace RaftBroker.Storage.IO;
 /// S1-T08), а имитировать асинхронный fsync обёрткой значило бы скрыть его реальную цену
 /// от планировщика и от бенчмарков S8-T05.
 /// </para>
+/// <para>
+/// Файл, открытый на запись, идёт без буфера процесса (<c>bufferSize: 1</c>, <c>S1-T06</c>):
+/// иначе дописанные байты оставались бы в <see cref="FileStream"/> и читатель последнего
+/// сегмента (он открывает тот же файл по <see cref="OpenReadAsync"/>) не видел бы их до
+/// fsync. Буферизация тут ничего не даёт: партии записей собирает писатель, а не поток.
+/// Три границы отказов - процесс, ядро, устройство - остаются различимыми:
+/// <see cref="IStorageFile.WriteAsync"/> доводит байты до ядра, <see cref="IStorageFile.FlushToDiskAsync"/> -
+/// до устройства.
+/// </para>
 /// </remarks>
 public sealed class SystemStorageFileSystem : IStorageFileSystem
 {
@@ -40,7 +49,7 @@ public sealed class SystemStorageFileSystem : IStorageFileSystem
             FileMode.CreateNew,
             FileAccess.Write,
             FileShare.Read,
-            bufferSize: 4096,
+            bufferSize: 1,
             FileOptions.Asynchronous);
 
         return ValueTask.FromResult<IStorageFile>(new SystemStorageFile(fullPath, stream));
@@ -71,6 +80,62 @@ public sealed class SystemStorageFileSystem : IStorageFileSystem
             FileOptions.Asynchronous);
 
         return ValueTask.FromResult<IStorageReadFile>(new SystemStorageReadFile(fullPath, stream));
+    }
+
+    /// <inheritdoc />
+    public ValueTask<IStorageFile> OpenAppendAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var fullPath = Path.GetFullPath(path);
+
+        if (!File.Exists(fullPath))
+        {
+            throw new FileNotFoundException($"Файл '{fullPath}' не найден.", fullPath);
+        }
+
+        // FileMode.Open + Seek(конец) вместо FileMode.Append: у Append начальная позиция
+        // запоминается при открытии и после усечения файла указывала бы за его конец.
+        // FileShare.Read - тот же режим, что у CreateAsync: читатели обязаны открывать этот
+        // же файл, пока писатель его дописывает (последний сегмент читается читателем сегмента).
+        var stream = new FileStream(
+            fullPath,
+            FileMode.Open,
+            FileAccess.Write,
+            FileShare.Read,
+            bufferSize: 1,
+            FileOptions.Asynchronous);
+
+        stream.Seek(0, SeekOrigin.End);
+
+        return ValueTask.FromResult<IStorageFile>(new SystemStorageFile(fullPath, stream));
+    }
+
+    /// <inheritdoc />
+    public ValueTask<IReadOnlyList<string>> ListFilesAsync(string directory, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var fullPath = Path.GetFullPath(directory);
+
+        if (!Directory.Exists(fullPath))
+        {
+            return ValueTask.FromResult<IReadOnlyList<string>>([]);
+        }
+
+        IReadOnlyList<string> names =
+        [
+            .. Directory
+                .EnumerateFiles(fullPath)
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrEmpty(name))
+                .Select(name => name!)
+                .Order(StringComparer.Ordinal),
+        ];
+
+        return ValueTask.FromResult(names);
     }
 
     /// <inheritdoc />
@@ -142,6 +207,28 @@ public sealed class SystemStorageFileSystem : IStorageFileSystem
 
         public ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
             => stream.WriteAsync(buffer, cancellationToken);
+
+        public ValueTask TruncateAsync(long length, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (length > stream.Length)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(length),
+                    length,
+                    $"Усечение до {length} байт: файл '{Path}' имеет длину {stream.Length}.");
+            }
+
+            stream.SetLength(length);
+
+            // Позиция может оказаться за новым концом: без этого следующая запись
+            // оставила бы дыру между концом файла и своим началом.
+            stream.Seek(0, SeekOrigin.End);
+            stream.Flush(flushToDisk: true);
+
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask FlushToDiskAsync(CancellationToken cancellationToken)
         {

@@ -32,6 +32,36 @@ public interface IStorageFileSystem
     /// <exception cref="FileNotFoundException">Файла нет.</exception>
     ValueTask<IStorageReadFile> OpenReadAsync(string path, CancellationToken cancellationToken);
 
+    /// <summary>Открывает существующий файл на дозапись: указатель в конце файла.</summary>
+    /// <param name="path">Полный или относительный путь.</param>
+    /// <param name="cancellationToken">Отмена до открытия файла.</param>
+    /// <returns>Открытый на запись файл; существующее содержимое сохраняется.</returns>
+    /// <remarks>
+    /// Добавлено в <c>S1-T06</c>: журнал продолжает последний сегмент, а не начинает новый файл,
+    /// после усечения конфликтующего хвоста (<c>TruncateSuffixAsync</c>) и после перезапуска.
+    /// Начать новый сегмент на том же месте нельзя: сегмент с базовым индексом
+    /// <c>lastIndex + 1</c> уже существует, а <see cref="CreateAsync"/> имеет семантику
+    /// "только новый". Дозапись при этом не ослабляет §7 формата: имя сегмента по-прежнему
+    /// не меняется, меняется только его длина.
+    /// </remarks>
+    /// <exception cref="FileNotFoundException">Файла нет.</exception>
+    ValueTask<IStorageFile> OpenAppendAsync(string path, CancellationToken cancellationToken);
+
+    /// <summary>Перечисляет файлы каталога.</summary>
+    /// <param name="directory">Каталог; отсутствующий каталог - пустой список, а не ошибка.</param>
+    /// <param name="cancellationToken">Отмена до перечисления.</param>
+    /// <returns>
+    /// Имена файлов (без пути), отсортированные по возрастанию порядковых значений: порядок
+    /// результата не зависит от файловой системы и потому пригоден для проверок в тестах.
+    /// </returns>
+    /// <remarks>
+    /// Добавлено в <c>S1-T06</c>: индекс сегментов строится перечислением каталога
+    /// (§9.5 шаг 1), а не доверенным файлом индекса (открытое решение 2 этапа). Каталог, которого
+    /// ещё нет, - это пустой журнал: узел создаёт его при первой записи. Подкаталоги
+    /// не возвращаются: §9.5 говорит о файлах.
+    /// </remarks>
+    ValueTask<IReadOnlyList<string>> ListFilesAsync(string directory, CancellationToken cancellationToken);
+
     /// <summary>Укорачивает существующий файл до указанной длины и сбрасывает изменение на устройство.</summary>
     /// <param name="path">Полный или относительный путь.</param>
     /// <param name="length">Новая длина файла; не больше текущей.</param>

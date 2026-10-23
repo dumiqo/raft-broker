@@ -319,6 +319,114 @@ public sealed class SystemStorageFileSystemTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenAppendAsync_ContinuesTheFileInsteadOfOverwritingIt()
+    {
+        // Продолжение сегмента (S1-T06) - единственная запись, которая не создаёт файл:
+        // FileMode.Append обязан дописать в конец, а не начать файл заново.
+        var path = Path.Combine(_directory, "data.bin");
+        var fileSystem = SystemStorageFileSystem.Instance;
+
+        await using (var file = await fileSystem.CreateAsync(path, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1, 2 }, CancellationToken.None);
+            await file.FlushToDiskAsync(CancellationToken.None);
+        }
+
+        await using (var file = await fileSystem.OpenAppendAsync(path, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 3, 4 }, CancellationToken.None);
+            await file.FlushToDiskAsync(CancellationToken.None);
+        }
+
+        File.ReadAllBytes(path).Should().Equal(1, 2, 3, 4);
+    }
+
+    [Fact]
+    public async Task OpenAppendAsync_TruncatesAndKeepsWritingAtTheNewEnd()
+    {
+        // Усечение через писатель (обрезка конфликтующего хвоста) не должно оставлять дыру
+        // между новым концом файла и следующей записью.
+        var path = Path.Combine(_directory, "data.bin");
+        var fileSystem = SystemStorageFileSystem.Instance;
+
+        await using (var file = await fileSystem.CreateAsync(path, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1, 2, 3, 4, 5 }, CancellationToken.None);
+            await file.FlushToDiskAsync(CancellationToken.None);
+        }
+
+        await using (var file = await fileSystem.OpenAppendAsync(path, CancellationToken.None))
+        {
+            await file.TruncateAsync(3, CancellationToken.None);
+            new FileInfo(path).Length.Should().Be(3, "усечение через открытый писатель видно сразу");
+
+            await file.WriteAsync(new byte[] { 9 }, CancellationToken.None);
+            await file.FlushToDiskAsync(CancellationToken.None);
+        }
+
+        File.ReadAllBytes(path).Should().Equal(1, 2, 3, 9);
+    }
+
+    [Fact]
+    public async Task OpenAppendAsync_TruncateToALongerLength_Throws()
+    {
+        var path = Path.Combine(_directory, "data.bin");
+        var fileSystem = SystemStorageFileSystem.Instance;
+
+        await using (var file = await fileSystem.CreateAsync(path, CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1, 2 }, CancellationToken.None);
+        }
+
+        var append = await fileSystem.OpenAppendAsync(path, CancellationToken.None);
+
+        Func<Task> truncate = async () => await append.TruncateAsync(5, CancellationToken.None);
+
+        await truncate.Should().ThrowAsync<ArgumentOutOfRangeException>();
+
+        await append.DisposeAsync();
+        File.ReadAllBytes(path).Should().Equal(1, 2);
+    }
+
+    [Fact]
+    public async Task OpenAppendAsync_OnAMissingFile_Throws()
+    {
+        var path = Path.Combine(_directory, "absent.bin");
+
+        Func<Task> open = async () => await SystemStorageFileSystem.Instance.OpenAppendAsync(path, CancellationToken.None);
+
+        await open.Should().ThrowAsync<FileNotFoundException>();
+    }
+
+    [Fact]
+    public async Task ListFilesAsync_ReturnsFileNamesOnlyAndAnEmptyListForAMissingDirectory()
+    {
+        // Каталог журнала читается целиком (SegmentCatalog, S1-T06): имена без путей,
+        // в порядке, на который можно положиться.
+        var path = Path.Combine(_directory, "nested");
+        var fileSystem = SystemStorageFileSystem.Instance;
+
+        await using (var file = await fileSystem.CreateAsync(Path.Combine(path, "b.bin"), CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1 }, CancellationToken.None);
+        }
+
+        await using (var file = await fileSystem.CreateAsync(Path.Combine(path, "a.bin"), CancellationToken.None))
+        {
+            await file.WriteAsync(new byte[] { 1 }, CancellationToken.None);
+        }
+
+        var names = await fileSystem.ListFilesAsync(path, CancellationToken.None);
+
+        names.Should().Equal("a.bin", "b.bin");
+
+        // Отсутствующий каталог - пустой журнал, а не исключение: он появится первым append.
+        var missing = await fileSystem.ListFilesAsync(Path.Combine(_directory, "absent"), CancellationToken.None);
+
+        missing.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SegmentRecovery_OnRealFileSystem_TruncatesTheTornTailOnDisk()
     {
         var options = new SegmentWriterOptions

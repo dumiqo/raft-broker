@@ -151,6 +151,41 @@ public sealed class FakeStorageFileSystem : IStorageFileSystem
     }
 
     /// <inheritdoc />
+    public ValueTask<IStorageFile> OpenAppendAsync(string path, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_files.TryGetValue(path, out var file))
+        {
+            throw new FileNotFoundException($"Файл '{path}' не создавался.", path);
+        }
+
+        // Запись в FakeStorageFile всегда дописывает в конец - ровно семантика FileMode.Append.
+        // Дескриптор считается новым: файл, закрытый предыдущим писателем, снова пригоден для записи.
+        file.Reopen();
+
+        return ValueTask.FromResult<IStorageFile>(file);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<IReadOnlyList<string>> ListFilesAsync(string directory, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        IReadOnlyList<string> names =
+        [
+            .. _files.Keys
+                .Where(path => Path.GetDirectoryName(path) == directory)
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrEmpty(name))
+                .Select(name => name!)
+                .Order(StringComparer.Ordinal),
+        ];
+
+        return ValueTask.FromResult(names);
+    }
+
+    /// <inheritdoc />
     public ValueTask TruncateAsync(string path, long length, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -236,9 +271,20 @@ internal sealed class FakeStorageFile(FakeStorageFileSystem owner, string path) 
     /// <summary>Закрыт ли файл: писатель обязан закрывать сегмент при rollover.</summary>
     public bool IsDisposed { get; private set; }
 
+    /// <summary>
+    /// Отмечает файл открытым заново: дозапись после закрытия - это новый дескриптор.
+    /// </summary>
+    /// <remarks>
+    /// Нужно потому, что дубль хранит один экземпляр на файл: продолжение сегмента
+    /// (<see cref="RaftBroker.Storage.Log.SegmentWriter.ResumeAsync"/>) закрывает и снова открывает его.
+    /// Без сброса <see cref="IsDisposed"/> запись в только что открытый файл падала бы.
+    /// </remarks>
+    internal void Reopen() => IsDisposed = false;
+
     public ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         owner.Record(new StorageOperation(StorageOperationKind.Write, Path, buffer.Length));
 
         foreach (var value in buffer.Span)
@@ -249,9 +295,29 @@ internal sealed class FakeStorageFile(FakeStorageFileSystem owner, string path) 
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask TruncateAsync(long length, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+
+        if (length > Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(length),
+                length,
+                $"Усечение до {length} байт: файл '{Path}' имеет длину {Count}.");
+        }
+
+        owner.Record(new StorageOperation(StorageOperationKind.Truncate, Path, (int)length));
+        Truncate(length);
+
+        return ValueTask.CompletedTask;
+    }
+
     public ValueTask FlushToDiskAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         owner.Record(new StorageOperation(StorageOperationKind.FlushToDisk, Path));
         return ValueTask.CompletedTask;
     }

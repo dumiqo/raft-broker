@@ -121,6 +121,16 @@ public sealed class SegmentHeaderCodecTests
     }
 
     [Fact]
+    public void ToString_IsForDiagnosticsAndNamesTheSegment()
+    {
+        // Строка попадает в логи и в сообщения об порче: в ней должны быть и индекс, и время,
+        // иначе разбирать инцидент придётся по hex-дампу.
+        var header = new SegmentHeader(new LogIndex(7), createdAtUnixMs: 1_700_000_000_000);
+
+        header.ToString().Should().Be("сегмент с 7, создан 1700000000000 мс Unix");
+    }
+
+    [Fact]
     public void BaseIndexBelowOne_IsRejectedOnConstruction()
     {
         var act = () => new SegmentHeader(new LogIndex(0), 1);

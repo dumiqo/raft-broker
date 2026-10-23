@@ -1,7 +1,7 @@
 # S1-T06 - LogStore: индекс сегментов, Append/Get/TruncateSuffix, retention по снапшоту
 
 - Этап: S1 - Долговечный лог и снапшоты
-- Статус: in-progress (в рабочем дереве, без коммита на 2026-10-22)
+- Статус: done (коммит в серии `S1-T06`); ревью-гейт `R1` - за владельцем
 - Зависит от: `S1-T03` (пишущая половина), `S1-T05` (восстановление сегмента)
 - Спецификация этапа: `docs/stages/01 - Durable log and snapshots.md`
 - Формат сегмента: `docs/formats/log-segment.md`
@@ -31,14 +31,28 @@ public interface ILogStore
     LogIndex CommittedIndex { get; }      // ниже этого индекса записи неизменяемы
 
     ValueTask AppendAsync(IReadOnlyList<LogRecord> records, DurabilityMode mode, CancellationToken ct);
-    ValueTask<LogRecord?> GetAsync(LogIndex index, CancellationToken ct);
+    ValueTask<LogLookupResult> GetAsync(LogIndex index, CancellationToken ct);
     ValueTask<IReadOnlyList<LogRecord>> ReadRangeAsync(LogIndex from, int maxCount, CancellationToken ct);
     ValueTask TruncateSuffixAsync(LogIndex from, CancellationToken ct);   // удаляет index >= from
-    ValueTask CompactAsync(SnapshotMetadata snapshot, CancellationToken ct);
+    ValueTask MarkCommittedAsync(LogIndex index, CancellationToken ct);
+    ValueTask CompactAsync(LogIndex upTo, CancellationToken ct);          // retention по снапшоту
 }
 ```
 
 Правило: `TruncateSuffixAsync(from)` разрешён только при `from > CommittedIndex`.
+
+Три уточнения, которых не было в первоначальном наброске (все записаны в ADR
+`docs/adr/0007-log-store-catalog.md`):
+
+- **`GetAsync` возвращает `LogLookupStatus`, а не `null`.** Отсутствие записи - два разных ответа для Raft:
+  `NotYet` (продолжать репликацию) и `Compacted` (`InstallSnapshot`, `S3-T02`). `null` не различает их, и
+  вызывающий неизбежно начал бы угадывать.
+- **`CompactAsync(LogIndex upTo)`, а не `CompactAsync(SnapshotMetadata)`.** Снапшот - тип `StateMachine`, и
+  параметр такого типа развернул бы зависимость `Storage -> StateMachine` (ранг 1 -> 3), что запрещено
+  архитектурным тестом. Журналу нужна граница, а не содержимое снапшота.
+- **`CommittedIndex` живёт только в памяти процесса.** Формат сегмента (ADR `0003`) точки коммита не хранит,
+  поэтому после рестарта она равна нулю и поднимается заново по мере применения записей. Это ловушка для
+  ошибки вызывающего (R4), а не хранилище инварианта.
 
 ## Что уже есть под руками
 
@@ -55,10 +69,23 @@ public interface ILogStore
 
 ## Как проверять
 
-- Модульные тесты на обрезку хвоста, на чтение после обрезки, на удаление сегментов ниже снапшота.
-- Тест на отказ при `TruncateSuffixAsync(from <= CommittedIndex)`.
+- Модульные тесты на обрезку хвоста, на чтение после обрезки, на удаление сегментов ниже снапшота -
+  `tests/RaftBroker.UnitTests/Storage/LogStoreTests.cs`.
+- Тест на отказ при `TruncateSuffixAsync(from <= CommittedIndex)` - там же.
 - Тест на чтение через границу сегментов (rollover уже проверен в `S1-T03`, здесь - чтение объединённого журнала).
-- `pwsh scripts/verify.ps1` целиком: сборка, тесты, формат, анализаторы, границы слоёв.
+- Каталог сегментов отдельно от журнала: `SegmentCatalogTests.cs`, продолжение сегмента после рестарта -
+  `SegmentWriterResumeTests.cs`.
+- `pwsh scripts/verify.ps1` целиком: сборка, тесты, покрытие строк (не ниже 85%), формат, анализаторы,
+  границы слоёв.
+
+## Что сделано сверх DoD
+
+- `Log/SegmentCatalog.cs` вынесен из `LogStore`: правила §9.4/§9.5 (имя файла, непрерывность, пустым может быть
+  только последний сегмент) нужны и журналу, и восстановлению при старте (`S1-T07`); две копии нормы разъедутся.
+- `SegmentRecoveryResult` отдаёт исходный `SegmentScanResult`, а не копию его полей: вызывающий видит и вердикт
+  восстановления, и что именно прочитано.
+- Покрытие строк `src` закреплено порогом в гейте (`scripts/coverage.ps1`): без него цифра тихо просядет
+  на первой же задаче, где тесты пишутся "потом".
 
 ## Открытые вопросы
 

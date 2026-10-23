@@ -251,6 +251,9 @@ public sealed class SegmentReader : IAsyncDisposable
             }
 
             var record = frame.Record!;
+
+            // int, а не long: размер сегмента ограничен int.MaxValue (SegmentWriterOptions.Validate),
+            // поэтому смещение внутри файла в 32 бита помещается с запасом.
             _frameOffsets.Add((int)offset);
             expectedIndex = expectedIndex.Next();
             previousTerm = record.Term;
@@ -314,6 +317,24 @@ public sealed class SegmentReader : IAsyncDisposable
         }
 
         return await ReadFrameByPositionAsync((int)position, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Смещение начала фрейма записи <paramref name="index"/> от начала файла.</summary>
+    /// <param name="index">Индекс записи.</param>
+    /// <returns>Смещение в байтах либо <c>null</c>, если такой записи в сегменте нет.</returns>
+    /// <remarks>
+    /// Добавлено в <c>S1-T06</c>: усечение конфликтующего хвоста (<c>TruncateSuffixAsync</c>)
+    /// умеет только укорачивать файл, поэтому ему нужна не позиция записи в индексе, а граница
+    /// в байтах. Смещение берётся из уже построенного индекса, файл не перечитывается.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">Сканирование ещё не выполнялось.</exception>
+    public long? GetFrameOffset(LogIndex index)
+    {
+        EnsureScanned();
+
+        var position = index.Value - Header.BaseIndex.Value;
+
+        return position >= 0 && position < _frameOffsets.Count ? _frameOffsets[(int)position] : null;
     }
 
     /// <inheritdoc />
