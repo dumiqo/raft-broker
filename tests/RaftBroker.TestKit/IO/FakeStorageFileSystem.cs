@@ -178,10 +178,15 @@ public sealed class FakeStorageFileSystem : IStorageFileSystem
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Сравнение по полному пути: Path.GetDirectoryName нормализует разделители, поэтому
+        // каталог, заданный как "node/snapshots", иначе не совпал бы с "node\snapshots" в ключе
+        // и список молча оказался бы пустым.
+        var target = Path.GetFullPath(directory);
+
         IReadOnlyList<string> names =
         [
             .. _files.Keys
-                .Where(path => Path.GetDirectoryName(path) == directory)
+                .Where(path => string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), target, StringComparison.Ordinal))
                 .Select(Path.GetFileName)
                 .Where(name => !string.IsNullOrEmpty(name))
                 .Select(name => name!)

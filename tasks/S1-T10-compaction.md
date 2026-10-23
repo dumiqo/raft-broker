@@ -1,7 +1,7 @@
 # S1-T10 - Компакция: обрезка лога до снапшота и согласованность пары (лог, снапшот)
 
 - Этап: S1 - Долговечный лог и снапшоты
-- Статус: open
+- Статус: done (`9f00000`-подобный хеш см. `tasks/README.md`; ADR `0013-compaction-order.md`)
 - Зависит от: `S1-T06` (`LogStore`), `S1-T09` (`SnapshotStore`)
 - Спецификация этапа: `docs/stages/01 - Durable log and snapshots.md`
 - Гейт: `pwsh scripts/verify.ps1`
@@ -23,8 +23,9 @@
 
 ## Что уже есть под руками
 
-- `ILogStore.CompactAsync(SnapshotMetadata, CancellationToken)` и `ISnapshotStore.DeleteOlderThanAsync(LogIndex, ...)`
-  уже описаны контрактами этапа.
+- `ILogStore.CompactAsync(LogIndex, CancellationToken)` (индекс, не метаданные: `Storage` не знает типов состояния)
+  и `ISnapshotStore.DeleteOlderThanAsync(LogIndex, ...)`; связка пары живёт в `LogCompactor` (`Storage/Compaction/`),
+  ADR `0013-compaction-order.md`.
 - `S1-T06` даёт индекс сегментов и `FirstIndex`; `S1-T09` даёт атомарный снапшот.
 - Дубль файловой системы умеет падать на заданной операции, поэтому крах «между шагами» воспроизводим.
 
