@@ -9,18 +9,28 @@ namespace RaftBroker.TestKit.Randomness;
 /// Нужен там, где тест проверяет не распределение, а конкретную ветку: «срок оказался ровно
 /// <c>T</c>» или «ровно <c>2T - 1</c>». Значения выдаются по порядку и зажимаются в запрошенный
 /// диапазон, поэтому тест говорит, что вернуть, не повторяя арифметику вызывающего кода.
-/// Кончились значения - это ошибка теста, а не тихий ноль: иначе проверка границы молча
-/// превратилась бы в проверку середины.
+/// Кончились значения - повторяется последнее: таймер вызывается много раз за прогон, и
+/// повтор одного значения дешевле, чем список из сотни одинаковых. Пустой список - ошибка теста,
+/// а не тихий ноль: иначе проверка границы молча превратилась бы в проверку середины.
 /// </remarks>
 public sealed class ScriptedRandomSource : IRandomSource
 {
     private readonly Queue<int> _values;
+    private int _last;
 
     /// <summary>Создаёт источник из последовательности значений.</summary>
     /// <param name="values">Значения по порядку; каждое зажимается в <c>[min, max)</c>.</param>
     public ScriptedRandomSource(params int[] values)
     {
+        ArgumentNullException.ThrowIfNull(values);
+
+        if (values.Length == 0)
+        {
+            throw new ArgumentException("Скрипт случайности без значений: тесту нечего возвращать.", nameof(values));
+        }
+
         _values = new Queue<int>(values);
+        _last = values[0];
     }
 
     /// <summary>Сколько значений ещё не выдано.</summary>
@@ -29,12 +39,12 @@ public sealed class ScriptedRandomSource : IRandomSource
     /// <inheritdoc />
     public int Next(int minInclusive, int maxExclusive)
     {
-        if (!_values.TryDequeue(out var value))
+        if (_values.TryDequeue(out var value))
         {
-            throw new InvalidOperationException("Скрипт случайности исчерпан: тесту не хватило значений.");
+            _last = value;
         }
 
-        return Math.Clamp(value, minInclusive, maxExclusive - 1);
+        return Math.Clamp(_last, minInclusive, maxExclusive - 1);
     }
 
     /// <inheritdoc />
