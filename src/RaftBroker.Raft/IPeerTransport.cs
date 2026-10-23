@@ -28,4 +28,10 @@ public interface IPeerTransport
     /// <param name="request">Запрос голоса.</param>
     /// <param name="cancellationToken">Отмена: прерванный вызов ответом не считается.</param>
     ValueTask<RequestVoteResponse> RequestVoteAsync(NodeId peer, RequestVoteRequest request, CancellationToken cancellationToken);
+
+    /// <summary>Отправляет пиру AppendEntries: heartbeat на этом этапе, репликацию - с <c>S3</c>.</summary>
+    /// <param name="peer">Кому отправлять.</param>
+    /// <param name="request">Сообщение лидера.</param>
+    /// <param name="cancellationToken">Отмена: прерванный вызов ответом не считается.</param>
+    ValueTask<AppendEntriesResponse> AppendEntriesAsync(NodeId peer, AppendEntriesRequest request, CancellationToken cancellationToken);
 }

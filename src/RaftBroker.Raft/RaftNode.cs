@@ -9,7 +9,7 @@ using RaftBroker.Storage.Log;
 namespace RaftBroker.Raft;
 
 /// <summary>
-/// Узел Raft на этапе S2: роли, term и выборы (<c>S2-T05</c>).
+/// Узел Raft на этапе S2: роли, term и выборы (<c>S2-T05</c>), лидер и heartbeat (<c>S2-T06</c>).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -45,12 +45,18 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
     private readonly IPeerTransport _transport;
     private readonly IClusterConfiguration _configuration;
     private readonly ElectionTimer _timer;
+    private readonly IClock _clock;
+    private readonly int _heartbeatIntervalMs;
+    private readonly Dictionary<NodeId, PeerProgress> _progress = [];
 
     /// <summary>Сигнал таймера: выставляется в его потоке, читается в <see cref="StepAsync"/>.</summary>
     private volatile bool _electionDue;
 
     /// <summary>Номер раунда: ответы прошлых раундов не считаются.</summary>
     private long _round;
+
+    /// <summary>Монотонная метка, после которой лидеру снова пора разослать heartbeat.</summary>
+    private long _nextHeartbeatMs;
 
     /// <summary>Создаёт узел.</summary>
     /// <param name="options">Параметры узла.</param>
@@ -90,6 +96,8 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         _transport = transport;
         _configuration = configuration;
         Id = options.Id;
+        _clock = clock;
+        _heartbeatIntervalMs = (int)options.HeartbeatInterval.TotalMilliseconds;
         _timer = new ElectionTimer(clock, random, options.Election, () => _electionDue = true);
     }
 
@@ -108,8 +116,15 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
     /// <summary>Известный лидер, подсказка для клиентов.</summary>
     public NodeId? LeaderId => _state.LeaderId;
 
+    /// <summary>Представление лидера о пирах (<c>S2-T06</c>); у не-лидера пусто.</summary>
+    /// <remarks>
+    /// Снимок на момент чтения: меняется только под воротцами узла, поэтому читать его имеет смысл
+    /// после завершения <see cref="StepAsync"/> (внутри узла его читает CheckQuorum, <c>S2-T09</c>).
+    /// </remarks>
+    public IReadOnlyDictionary<NodeId, PeerProgress> LeaderProgress => _progress;
+
     /// <summary>Запускает отсчёт до первых выборов.</summary>
-    public void Start() => _timer.Reset();
+    public void Start() => ResetElectionTimer();
 
     /// <summary>Выполняет отложенную работу: выборы по истёкшему сроку.</summary>
     /// <param name="cancellationToken">Отмена: прерывание до записи голоса означает, что раунд не начался.</param>
@@ -121,6 +136,20 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         try
         {
+            if (_state.Role == RaftRole.Leader)
+            {
+                // Лидер выборов не ждёт: его работа - heartbeat по расписанию. Отправка идёт под
+                // воротцами, потому что обработчики RPC не вызывают отправителя обратно: цикла
+                // ожидания из этого не возникает.
+                if (_clock.TimestampMs >= _nextHeartbeatMs)
+                {
+                    _nextHeartbeatMs = _clock.TimestampMs + _heartbeatIntervalMs;
+                    await SendHeartbeatsAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
             if (!_electionDue)
             {
                 return;
@@ -157,14 +186,18 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         try
         {
+            var previousTerm = _state.CurrentTerm;
+
             var response = await RequestVoteHandler
                 .HandleAsync(request, _state, _log.LastTerm, _log.LastIndex, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (response.VoteGranted)
+            if (response.VoteGranted || response.Term > previousTerm)
             {
-                // Отдавшему голос незачем сразу идти на выборы: отсчёт начинается заново.
-                _timer.Reset();
+                // Отдавшему голос незачем сразу идти на выборы, а ушедшему в follower по большему
+                // term - тем более. Отказ в том же term таймер не трогает: иначе сломанный узел
+                // одним спамом запросов не давал бы кластеру выбрать лидера.
+                ResetElectionTimer();
             }
 
             return response;
@@ -204,7 +237,7 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         // Отсчёт начинается заново: интервал между раундами не меньше T, иначе одинокая нода
         // раскручивала бы term бесконечным циклом выборов.
-        _timer.Reset();
+        ResetElectionTimer();
 
         var request = new RequestVoteRequest(Id, term, _log.LastIndex, _log.LastTerm);
 
@@ -282,26 +315,167 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         await BecomeLeaderAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Перезапускает таймер выборов и снимает уже сработавший сигнал.
+    /// </summary>
+    /// <remarks>
+    /// Снимать сигнал обязательно: таймер мог сработать, а heartbeat - прийти в том же шаге.
+    /// Без сброса признака узел пошёл бы на выборы, уже зная лидера, и поднял бы term на ровном месте.
+    /// </remarks>
+    private void ResetElectionTimer()
+    {
+        _electionDue = false;
+        _timer.Reset();
+    }
+
     private bool IsCurrent(ElectionRound round)
         => _round == round.Id && _state.Role == RaftRole.Candidate && _state.CurrentTerm == round.Term;
 
-    /// <summary>Победа: роль лидера и остановка таймера выборов.</summary>
-    private ValueTask BecomeLeaderAsync(CancellationToken cancellationToken)
+    /// <summary>Победа: роль лидера, репликаторы пиров, no-op запись нового term и первый heartbeat.</summary>
+    private async ValueTask BecomeLeaderAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         _state.Role = RaftRole.Leader;
         _state.LeaderId = Id;
         _timer.Stop();
 
-        return ValueTask.CompletedTask;
+        await AppendNoopAsync(cancellationToken).ConfigureAwait(false);
+
+        _progress.Clear();
+
+        foreach (var peer in _configuration.Voters.Where(voter => voter != Id))
+        {
+            // matchIndex начинается с нуля: неподтверждённое не считается совпавшим, а nextIndex
+            // считается после no-op записи - лидер отправляет следующую за ней.
+            _progress[peer] = new PeerProgress(peer, _log.LastIndex.Next(), LogIndex.Empty, _clock.TimestampMs);
+        }
+
+        // Первый heartbeat - сразу, не дожидаясь интервала: иначе кластер узнаёт лидера только
+        // через треть срока выборов, а записи прошлых term остаются неясными (5.4.2).
+        _nextHeartbeatMs = _clock.TimestampMs + _heartbeatIntervalMs;
+        await SendHeartbeatsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Дописывает пустую запись своего term (<c>S2-T06</c>): снимает вопрос «закоммичено ли что-то
+    /// из прошлых term» до появления правила коммита в <c>S3</c>.
+    /// </summary>
+    private async ValueTask AppendNoopAsync(CancellationToken cancellationToken)
+    {
+        var noop = LogRecord.Noop(_log.LastIndex.Next(), _state.CurrentTerm);
+
+        // Через журнал, а не мимо него: очередь писателя (S1-T08) одна на всех.
+        await _log.AppendAsync([noop], cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Рассылает heartbeat всем пирам и запоминает ответы.</summary>
+    private async ValueTask SendHeartbeatsAsync(CancellationToken cancellationToken)
+    {
+        var request = AppendEntriesRequest.Heartbeat(
+            Id,
+            _state.CurrentTerm,
+            _log.LastIndex,
+            _log.LastTerm,
+            _log.CommittedIndex);
+
+        var sends = _progress.Keys
+            .Select(peer => SendAppendEntriesAsync(peer, request, cancellationToken).AsTask())
+            .ToArray();
+
+        var replies = await Task.WhenAll(sends).ConfigureAwait(false);
+
+        foreach (var reply in replies)
+        {
+            if (reply.Response is not { } response)
+            {
+                continue;
+            }
+
+            if (response.Term > _state.CurrentTerm)
+            {
+                // Пир живёт в большем term: лидер устарел, уходить надо сразу.
+                await StepDownAsync(response.Term, cancellationToken).ConfigureAwait(false);
+
+                return;
+            }
+
+            if (response.Success && _progress.TryGetValue(reply.Peer, out var progress))
+            {
+                _progress[reply.Peer] = progress with { LastResponseMs = _clock.TimestampMs };
+            }
+        }
+    }
+
+    private async ValueTask<AppendEntriesReply> SendAppendEntriesAsync(
+        NodeId peer,
+        AppendEntriesRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _transport.AppendEntriesAsync(peer, request, cancellationToken).ConfigureAwait(false);
+
+            return new AppendEntriesReply(peer, response);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Пир недоступен: лидер без кворума узнает об этом из CheckQuorum (S2-T09), а не здесь.
+            return new AppendEntriesReply(peer, null);
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
+        AppendEntriesRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (request.Term < _state.CurrentTerm)
+            {
+                // Отставший лидер: ответ с настоящим term - единственная подсказка, что он устарел.
+                return new AppendEntriesResponse(_state.CurrentTerm, Success: false);
+            }
+
+            if (request.Term > _state.CurrentTerm)
+            {
+                // Новый term: сначала диск, потом роль. Всё, что принадлежало лидерству, умирает.
+                await StepDownAsync(request.Term, cancellationToken).ConfigureAwait(false);
+            }
+            else if (_state.Role != RaftRole.Follower)
+            {
+                // Равный term при роли кандидата или лидера: лидер этого term уже есть, и это не мы.
+                // Диск не трогаем - term тот же, а голос выдавать некому.
+                _progress.Clear();
+                _state.Role = RaftRole.Follower;
+            }
+
+            _state.LeaderId = request.Leader;
+            ResetElectionTimer();
+
+            return new AppendEntriesResponse(_state.CurrentTerm, Success: true);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     /// <summary>Уход в follower по большему term: term на диск до смены роли.</summary>
     private async ValueTask StepDownAsync(Term newTerm, CancellationToken cancellationToken)
     {
         await _state.PersistAsync(newTerm, votedFor: null, cancellationToken).ConfigureAwait(false);
+
+        // Репликаторы лидера умирают вместе с ролью: отправка после StepDown - это сообщение
+        // устаревшего лидера, то есть путь к двум лидерам (S2-T10 ловит это как инвариант).
+        _progress.Clear();
         _state.Role = RaftRole.Follower;
         _state.LeaderId = null;
-        _timer.Reset();
+        ResetElectionTimer();
     }
 }

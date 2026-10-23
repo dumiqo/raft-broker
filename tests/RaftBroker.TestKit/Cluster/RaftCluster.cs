@@ -59,6 +59,9 @@ public sealed class RaftCluster : IAsyncDisposable
     /// <summary>Журнал узла: нужен тестам, которые собирают узел вручную.</summary>
     public ILogStore LogOf(NodeId id) => _logs[id];
 
+    /// <summary>Файловая система узла: по ней тест проверяет, что запись на диск была или её не было.</summary>
+    public FakeStorageFileSystem FileSystemOf(NodeId id) => _fileSystems[id];
+
     /// <summary>Идентификатор узла по порядковому номеру.</summary>
     public static NodeId IdAt(int index) => new($"node-{index + 1}");
 
@@ -149,7 +152,7 @@ public sealed class RaftCluster : IAsyncDisposable
             .ConfigureAwait(false);
 
         var node = new RaftNode(
-            new RaftNodeOptions(id, _options.Election),
+            new RaftNodeOptions(id, _options.Election, _options.HeartbeatInterval),
             state,
             open.Store!,
             Network.CreateTransport(id),
@@ -173,6 +176,9 @@ public sealed class RaftClusterOptions
 
     /// <summary>Базовый срок таймера выборов.</summary>
     public ElectionTimerOptions Election { get; set; } = ElectionTimerOptions.Default;
+
+    /// <summary>Интервал heartbeat; по умолчанию треть срока выборов.</summary>
+    public TimeSpan? HeartbeatInterval { get; set; }
 
     /// <summary>Применяемая конфигурация; по умолчанию - статическая из всех узлов.</summary>
     public IClusterConfiguration? Configuration { get; set; }

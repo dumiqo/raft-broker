@@ -15,4 +15,7 @@ public interface IRaftMessageHandler
 {
     /// <summary>Обрабатывает запрос голоса.</summary>
     ValueTask<RequestVoteResponse> HandleRequestVoteAsync(RequestVoteRequest request, CancellationToken cancellationToken);
+
+    /// <summary>Обрабатывает AppendEntries: heartbeat обновляет представление follower о лидере.</summary>
+    ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(AppendEntriesRequest request, CancellationToken cancellationToken);
 }

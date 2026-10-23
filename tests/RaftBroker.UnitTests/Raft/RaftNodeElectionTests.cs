@@ -252,6 +252,11 @@ public sealed class RaftNodeElectionTests
 
             return response;
         }
+
+        public ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
+            AppendEntriesRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new AppendEntriesResponse(request.Term, Success: true));
     }
 
     /// <summary>Пир, отвечающий отменой: так выглядит истёкший deadline в настоящем транспорте.</summary>
@@ -261,6 +266,11 @@ public sealed class RaftNodeElectionTests
             RequestVoteRequest request,
             CancellationToken cancellationToken)
             => ValueTask.FromException<RequestVoteResponse>(new OperationCanceledException());
+
+        public ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
+            AppendEntriesRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<AppendEntriesResponse>(new OperationCanceledException());
     }
 
     /// <summary>Конфигурация, требующая согласия всех: число голосов не выводится из размера списка.</summary>

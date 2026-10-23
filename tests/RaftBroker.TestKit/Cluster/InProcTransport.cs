@@ -22,4 +22,16 @@ internal sealed class InProcTransport(InProcCluster cluster, NodeId self) : IPee
             request,
             static (handler, message, token) => handler.HandleRequestVoteAsync(message, token),
             cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<AppendEntriesResponse> AppendEntriesAsync(
+        NodeId peer,
+        AppendEntriesRequest request,
+        CancellationToken cancellationToken)
+        => cluster.SendAsync(
+            self,
+            peer,
+            request,
+            static (handler, message, token) => handler.HandleAppendEntriesAsync(message, token),
+            cancellationToken);
 }

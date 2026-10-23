@@ -16,3 +16,8 @@ internal sealed record ElectionRound(long Id, Term Term, RequestVoteRequest Requ
 /// <param name="Peer">Кто отвечал.</param>
 /// <param name="Response">Ответ или <c>null</c>, если связи не было.</param>
 internal readonly record struct VoteReply(NodeId Peer, RequestVoteResponse? Response);
+
+/// <summary>Ответ пира на AppendEntries; <c>null</c> - пир не ответил (<c>S2-T06</c>).</summary>
+/// <param name="Peer">Кто отвечал.</param>
+/// <param name="Response">Ответ или <c>null</c>, если связи не было.</param>
+internal readonly record struct AppendEntriesReply(NodeId Peer, AppendEntriesResponse? Response);
