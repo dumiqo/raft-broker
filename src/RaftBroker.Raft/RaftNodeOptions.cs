@@ -17,7 +17,15 @@ public sealed class RaftNodeOptions
     /// Интервал heartbeat лидера; по умолчанию треть <c>T</c> - запас, при котором потеря одного
     /// heartbeat не запускает выборы.
     /// </param>
-    public RaftNodeOptions(NodeId id, ElectionTimerOptions election, TimeSpan? heartbeatInterval = null)
+    /// <param name="preVote">
+    /// Включён ли PreVote (<c>S2-T07</c>); по умолчанию да - защита от disruption нужна всегда,
+    /// а выключение остаётся для сравнения поведения в симуляторе (<c>S8</c>).
+    /// </param>
+    public RaftNodeOptions(
+        NodeId id,
+        ElectionTimerOptions election,
+        TimeSpan? heartbeatInterval = null,
+        bool preVote = true)
     {
         ArgumentNullException.ThrowIfNull(election);
 
@@ -34,6 +42,7 @@ public sealed class RaftNodeOptions
         Id = id;
         Election = election;
         HeartbeatInterval = interval;
+        PreVote = preVote;
     }
 
     /// <summary>Идентификатор узла.</summary>
@@ -44,4 +53,7 @@ public sealed class RaftNodeOptions
 
     /// <summary>Интервал heartbeat лидера (<c>S2-T06</c>); меньше <c>T</c> обязательно.</summary>
     public TimeSpan HeartbeatInterval { get; }
+
+    /// <summary>Предварять ли настоящий раунд выборов запросом PreVote (<c>S2-T07</c>).</summary>
+    public bool PreVote { get; }
 }

@@ -16,6 +16,9 @@ public interface IRaftMessageHandler
     /// <summary>Обрабатывает запрос голоса.</summary>
     ValueTask<RequestVoteResponse> HandleRequestVoteAsync(RequestVoteRequest request, CancellationToken cancellationToken);
 
+    /// <summary>Отвечает на PreVote, не меняя ни term, ни голос, ни таймер (<c>S2-T07</c>).</summary>
+    ValueTask<PreVoteResponse> HandlePreVoteAsync(PreVoteRequest request, CancellationToken cancellationToken);
+
     /// <summary>Обрабатывает AppendEntries: heartbeat обновляет представление follower о лидере.</summary>
     ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(AppendEntriesRequest request, CancellationToken cancellationToken);
 }

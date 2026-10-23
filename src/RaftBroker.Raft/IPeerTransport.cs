@@ -29,6 +29,12 @@ public interface IPeerTransport
     /// <param name="cancellationToken">Отмена: прерванный вызов ответом не считается.</param>
     ValueTask<RequestVoteResponse> RequestVoteAsync(NodeId peer, RequestVoteRequest request, CancellationToken cancellationToken);
 
+    /// <summary>Спрашивает у пира PreVote (<c>S2-T07</c>): дал бы голос, не меняя term.</summary>
+    /// <param name="peer">Кого спрашивать.</param>
+    /// <param name="request">Запрос PreVote.</param>
+    /// <param name="cancellationToken">Отмена: прерванный вызов ответом не считается.</param>
+    ValueTask<PreVoteResponse> PreVoteAsync(NodeId peer, PreVoteRequest request, CancellationToken cancellationToken);
+
     /// <summary>Отправляет пиру AppendEntries: heartbeat на этом этапе, репликацию - с <c>S3</c>.</summary>
     /// <param name="peer">Кому отправлять.</param>
     /// <param name="request">Сообщение лидера.</param>

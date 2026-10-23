@@ -230,6 +230,8 @@ public sealed class RaftNodeElectionTests
         // Таймер срабатывает первым только у первого узла: 200 мс против 300 и 350.
         var options = new RaftClusterOptions
         {
+            // Тесты этого файла про настоящий раунд: PreVote проверяется отдельно (S2-T07).
+            PreVote = false,
             RandomFor = index => new ScriptedRandomSource(index * 100),
         };
 
@@ -253,6 +255,11 @@ public sealed class RaftNodeElectionTests
             return response;
         }
 
+        public ValueTask<PreVoteResponse> HandlePreVoteAsync(
+            PreVoteRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new PreVoteResponse(new Term(0), VoteGranted: true));
+
         public ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
             AppendEntriesRequest request,
             CancellationToken cancellationToken)
@@ -266,6 +273,11 @@ public sealed class RaftNodeElectionTests
             RequestVoteRequest request,
             CancellationToken cancellationToken)
             => ValueTask.FromException<RequestVoteResponse>(new OperationCanceledException());
+
+        public ValueTask<PreVoteResponse> HandlePreVoteAsync(
+            PreVoteRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<PreVoteResponse>(new OperationCanceledException());
 
         public ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
             AppendEntriesRequest request,

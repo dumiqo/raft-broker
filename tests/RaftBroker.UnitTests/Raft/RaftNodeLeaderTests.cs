@@ -267,6 +267,11 @@ public sealed class RaftNodeLeaderTests
             CancellationToken cancellationToken)
             => ValueTask.FromResult(new RequestVoteResponse(request.Term, VoteGranted: true));
 
+        public ValueTask<PreVoteResponse> HandlePreVoteAsync(
+            PreVoteRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new PreVoteResponse(new Term(0), VoteGranted: true));
+
         public ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
             AppendEntriesRequest request,
             CancellationToken cancellationToken)
@@ -293,6 +298,7 @@ public sealed class RaftNodeLeaderTests
         {
             NodeCount = count,
             HeartbeatInterval = Heartbeat,
+            PreVote = false,
             // Раньше всех срабатывает таймер узла с номером first: остальные проигрывают выборы.
             RandomFor = index => new ScriptedRandomSource((index + count - first) % count * 20),
         });

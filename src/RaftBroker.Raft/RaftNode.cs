@@ -19,13 +19,18 @@ namespace RaftBroker.Raft;
 /// Вызывать <see cref="StepAsync"/> обязан рантайм: в бою - цикл S4, в тестах - сам тест.
 /// </para>
 /// <para>
-/// Раунд выборов идёт в три фазы, и это не стиль:
+/// Раунд выборов идёт в две фазы с подготовкой, и это не стиль:
 /// </para>
 /// <list type="number">
 /// <item>под воротцами - поднять term, записать голос за себя, собрать запросы;</item>
 /// <item>без воротцев - разослать запросы параллельно и дождаться ответов;</item>
 /// <item>под воротцами - применить ответы, если раунд всё ещё тот же.</item>
 /// </list>
+/// <para>
+/// При включённом PreVote (<c>S2-T07</c>) фаз две пары: сначала опрос «дали бы голос?», который
+/// не трогает ни term, ни диск, и только при кворуме - настоящий раунд. Поэтому узел, выпавший из
+/// сети, не накручивает term в одиночестве и не выбивает живого лидера по возвращении.
+/// </para>
 /// <para>
 /// Отправка под воротцами дала бы клинч: два узла, одновременно проводящих выборы, ждали бы
 /// воротца друг друга. Ответы старого раунда не применяются: номер раунда и term фиксируются
@@ -47,6 +52,7 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
     private readonly ElectionTimer _timer;
     private readonly IClock _clock;
     private readonly int _heartbeatIntervalMs;
+    private readonly bool _preVoteEnabled;
     private readonly Dictionary<NodeId, PeerProgress> _progress = [];
 
     /// <summary>Сигнал таймера: выставляется в его потоке, читается в <see cref="StepAsync"/>.</summary>
@@ -98,6 +104,7 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         Id = options.Id;
         _clock = clock;
         _heartbeatIntervalMs = (int)options.HeartbeatInterval.TotalMilliseconds;
+        _preVoteEnabled = options.PreVote;
         _timer = new ElectionTimer(clock, random, options.Election, () => _electionDue = true);
     }
 
@@ -126,12 +133,22 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
     /// <summary>Запускает отсчёт до первых выборов.</summary>
     public void Start() => ResetElectionTimer();
 
-    /// <summary>Выполняет отложенную работу: выборы по истёкшему сроку.</summary>
+    /// <summary>Выполняет отложенную работу: heartbeat лидера или раунд выборов по истёкшему сроку.</summary>
     /// <param name="cancellationToken">Отмена: прерывание до записи голоса означает, что раунд не начался.</param>
     public async ValueTask StepAsync(CancellationToken cancellationToken)
     {
-        ElectionRound? round = null;
+        var round = await StartRoundAsync(cancellationToken).ConfigureAwait(false);
 
+        while (round is not null)
+        {
+            // PreVote-раунд возвращает настоящий: два прохода, а не рекурсия.
+            round = await RunRoundAsync(round, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Фаза 1: heartbeat по расписанию или старт раунда по сработавшему сроку.</summary>
+    private async ValueTask<ElectionRound?> StartRoundAsync(CancellationToken cancellationToken)
+    {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
@@ -147,29 +164,44 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
                     await SendHeartbeatsAsync(cancellationToken).ConfigureAwait(false);
                 }
 
-                return;
+                return null;
             }
 
             if (!_electionDue)
             {
-                return;
+                return null;
             }
 
             _electionDue = false;
-            round = await BeginElectionAsync(cancellationToken).ConfigureAwait(false);
+
+            return _preVoteEnabled
+                ? BeginPreVoteRound()
+                : await BeginVoteRoundAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _gate.Release();
         }
+    }
 
-        var replies = await CollectVotesAsync(round, cancellationToken).ConfigureAwait(false);
+    /// <summary>Фазы 2 и 3: рассылка без воротцев, применение ответов - под ними.</summary>
+    /// <returns>Следующий раунд (<c>S2-T07</c>: настоящие выборы после удачного PreVote) или <c>null</c>.</returns>
+    private async ValueTask<ElectionRound?> RunRoundAsync(ElectionRound round, CancellationToken cancellationToken)
+    {
+        var replies = await CollectAsync(round, cancellationToken).ConfigureAwait(false);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
+            if (round.Kind == ElectionRoundKind.PreVote)
+            {
+                return await CompletePreVoteAsync(round, replies, cancellationToken).ConfigureAwait(false);
+            }
+
             await FinishElectionAsync(round, replies, cancellationToken).ConfigureAwait(false);
+
+            return null;
         }
         finally
         {
@@ -225,8 +257,27 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         _gate.Dispose();
     }
 
-    /// <summary>Фаза 1: новый term, голос за себя на диске, запросы для пиров.</summary>
-    private async ValueTask<ElectionRound> BeginElectionAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Старт PreVote-раунда (<c>S2-T07</c>): term и голос не меняются, на диск не пишется ничего.
+    /// </summary>
+    private ElectionRound BeginPreVoteRound()
+    {
+        var term = _state.CurrentTerm.Next();
+
+        // Роль - кандидат, иначе ответы раунда будут отброшены как чужие; term и голос при этом
+        // прежние, а диск не трогается вовсе: в этом весь смысл PreVote.
+        _state.Role = RaftRole.Candidate;
+        _state.LeaderId = null;
+
+        ResetElectionTimer();
+
+        var request = new RequestVoteRequest(Id, term, _log.LastIndex, _log.LastTerm);
+
+        return new ElectionRound(++_round, ElectionRoundKind.PreVote, _state.CurrentTerm, term, request, Peers());
+    }
+
+    /// <summary>Фаза 1 настоящего раунда: новый term, голос за себя на диске, запросы для пиров.</summary>
+    private async ValueTask<ElectionRound> BeginVoteRoundAsync(CancellationToken cancellationToken)
     {
         var term = _state.CurrentTerm.Next();
 
@@ -241,26 +292,39 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         var request = new RequestVoteRequest(Id, term, _log.LastIndex, _log.LastTerm);
 
-        return new ElectionRound(++_round, term, request, [.. _configuration.Voters.Where(voter => voter != Id)]);
+        return new ElectionRound(++_round, ElectionRoundKind.Vote, _state.CurrentTerm, term, request, Peers());
     }
 
+    private NodeId[] Peers() => [.. _configuration.Voters.Where(voter => voter != Id)];
+
     /// <summary>Фаза 2: запросы всем пирам параллельно; недоступный пир - просто нет голоса.</summary>
-    private async ValueTask<VoteReply[]> CollectVotesAsync(ElectionRound round, CancellationToken cancellationToken)
+    private async ValueTask<ElectionReply[]> CollectAsync(ElectionRound round, CancellationToken cancellationToken)
     {
         var requests = round.Peers
-            .Select(peer => AskAsync(peer, round.Request, cancellationToken).AsTask())
+            .Select(peer => AskAsync(peer, round, cancellationToken).AsTask())
             .ToArray();
 
         return await Task.WhenAll(requests).ConfigureAwait(false);
     }
 
-    private async ValueTask<VoteReply> AskAsync(NodeId peer, RequestVoteRequest request, CancellationToken cancellationToken)
+    private async ValueTask<ElectionReply> AskAsync(
+        NodeId peer,
+        ElectionRound round,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var response = await _transport.RequestVoteAsync(peer, request, cancellationToken).ConfigureAwait(false);
+            if (round.Kind == ElectionRoundKind.PreVote)
+            {
+                var preVote = new PreVoteRequest(Id, round.Term, round.Request.LastLogIndex, round.Request.LastLogTerm);
+                var preVoteResponse = await _transport.PreVoteAsync(peer, preVote, cancellationToken).ConfigureAwait(false);
 
-            return new VoteReply(peer, response);
+                return new ElectionReply(peer, preVoteResponse.Term, preVoteResponse.VoteGranted, Answered: true);
+            }
+
+            var response = await _transport.RequestVoteAsync(peer, round.Request, cancellationToken).ConfigureAwait(false);
+
+            return new ElectionReply(peer, response.Term, response.VoteGranted, Answered: true);
         }
         catch (OperationCanceledException)
         {
@@ -270,14 +334,44 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         {
             // Любой сбой связи - это «ответа нет», а не повод остановить раунд: кворум могли
             // дать остальные, и обрыв до одного пира не должен срывать выборы.
-            return new VoteReply(peer, null);
+            return new ElectionReply(peer, default, Granted: false, Answered: false);
         }
+    }
+
+    /// <summary>
+    /// Применение ответов PreVote (<c>S2-T07</c>): кворум «дал бы голос» открывает настоящий раунд.
+    /// </summary>
+    private async ValueTask<ElectionRound?> CompletePreVoteAsync(
+        ElectionRound round,
+        ElectionReply[] replies,
+        CancellationToken cancellationToken)
+    {
+        if (!IsCurrent(round))
+        {
+            return null;
+        }
+
+        foreach (var reply in replies)
+        {
+            if (reply is { Answered: true } && reply.Term > _state.CurrentTerm)
+            {
+                // Кто-то живёт в большем term: собеседование провалено, term узла устарел.
+                // Сам PreVote term не двигал - это единственное место, где узел узнаёт новое.
+                await StepDownAsync(reply.Term, cancellationToken).ConfigureAwait(false);
+
+                return null;
+            }
+        }
+
+        return HasQuorum(replies)
+            ? await BeginVoteRoundAsync(cancellationToken).ConfigureAwait(false)
+            : null;
     }
 
     /// <summary>Фаза 3: посчитать кворум, если раунд всё ещё текущий.</summary>
     private async ValueTask FinishElectionAsync(
         ElectionRound round,
-        VoteReply[] replies,
+        ElectionReply[] replies,
         CancellationToken cancellationToken)
     {
         if (!IsCurrent(round))
@@ -288,25 +382,15 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         foreach (var reply in replies)
         {
-            if (reply.Response is { } response && response.Term > _state.CurrentTerm)
+            if (reply is { Answered: true } && reply.Term > _state.CurrentTerm)
             {
-                await StepDownAsync(response.Term, cancellationToken).ConfigureAwait(false);
+                await StepDownAsync(reply.Term, cancellationToken).ConfigureAwait(false);
 
                 return;
             }
         }
 
-        var acknowledgers = new List<NodeId> { Id };
-
-        foreach (var reply in replies)
-        {
-            if (reply.Response is { VoteGranted: true })
-            {
-                acknowledgers.Add(reply.Peer);
-            }
-        }
-
-        if (!_configuration.IsQuorum(acknowledgers))
+        if (!HasQuorum(replies))
         {
             // Остаёмся кандидатом: следующий срок таймера начнёт новый раунд с term + 1.
             return;
@@ -328,8 +412,33 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         _timer.Reset();
     }
 
+    /// <summary>Кворум по ответам раунда: собственный голос/намерение считается первым.</summary>
+    /// <remarks>
+    /// В PreVote «свой голос» - это намерение, а не запись на диске: кворум здесь означает
+    /// «я бы проголосовал за себя и столько же пиров проголосовали бы», ничего не фиксируя.
+    /// </remarks>
+    private bool HasQuorum(ElectionReply[] replies)
+    {
+        var acknowledgers = new List<NodeId> { Id };
+
+        foreach (var reply in replies)
+        {
+            if (reply is { Answered: true, Granted: true })
+            {
+                acknowledgers.Add(reply.Peer);
+            }
+        }
+
+        return _configuration.IsQuorum(acknowledgers);
+    }
+
+    /// <summary>Раунд ещё текущий: та же роль, тот же term узла и тот же номер раунда.</summary>
+    /// <remarks>
+    /// Сравнивается term узла, а не term запроса: у PreVote запрос опережает term на единицу,
+    /// и по нему свежесть раунда не проверить.
+    /// </remarks>
     private bool IsCurrent(ElectionRound round)
-        => _round == round.Id && _state.Role == RaftRole.Candidate && _state.CurrentTerm == round.Term;
+        => _round == round.Id && _state.Role == RaftRole.Candidate && _state.CurrentTerm == round.NodeTerm;
 
     /// <summary>Победа: роль лидера, репликаторы пиров, no-op запись нового term и первый heartbeat.</summary>
     private async ValueTask BecomeLeaderAsync(CancellationToken cancellationToken)
@@ -424,6 +533,27 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         {
             // Пир недоступен: лидер без кворума узнает об этом из CheckQuorum (S2-T09), а не здесь.
             return new AppendEntriesReply(peer, null);
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<PreVoteResponse> HandlePreVoteAsync(
+        PreVoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            var granted = PreVoteRules.WouldGrant(request, _state.CurrentTerm, _log.LastTerm, _log.LastIndex);
+
+            // Ни term, ни голос, ни таймер: ответ на PreVote - это только намерение. Сброс таймера
+            // здесь позволил бы любому узлу глушить выборы кластера одним опросом.
+            return new PreVoteResponse(_state.CurrentTerm, granted);
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 

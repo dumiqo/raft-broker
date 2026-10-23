@@ -24,6 +24,18 @@ internal sealed class InProcTransport(InProcCluster cluster, NodeId self) : IPee
             cancellationToken);
 
     /// <inheritdoc />
+    public ValueTask<PreVoteResponse> PreVoteAsync(
+        NodeId peer,
+        PreVoteRequest request,
+        CancellationToken cancellationToken)
+        => cluster.SendAsync(
+            self,
+            peer,
+            request,
+            static (handler, message, token) => handler.HandlePreVoteAsync(message, token),
+            cancellationToken);
+
+    /// <inheritdoc />
     public ValueTask<AppendEntriesResponse> AppendEntriesAsync(
         NodeId peer,
         AppendEntriesRequest request,
