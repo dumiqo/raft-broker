@@ -227,9 +227,10 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
             if (response.VoteGranted || response.Term > previousTerm)
             {
                 // Отдавшему голос незачем сразу идти на выборы, а ушедшему в follower по большему
-                // term - тем более. Отказ в том же term таймер не трогает: иначе сломанный узел
-                // одним спамом запросов не давал бы кластеру выбрать лидера.
-                ResetElectionTimer();
+                // терму - тем более. Уборка та же, что в StepDown: голос мог отобрать лидерство.
+                // Отказ в том же терме ничего не трогает: иначе сломанный узел одним спамом
+                // запросов не давал бы кластеру выбрать лидера.
+                LeaveRole();
             }
 
             return response;
@@ -353,10 +354,10 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         foreach (var reply in replies)
         {
-            if (reply is { Answered: true } && reply.Term > _state.CurrentTerm)
+            if (reply is { Answered: true } && RaftRoleTransitions.Decide(_state.CurrentTerm, reply.Term) == StepKind.StepDown)
             {
-                // Кто-то живёт в большем term: собеседование провалено, term узла устарел.
-                // Сам PreVote term не двигал - это единственное место, где узел узнаёт новое.
+                // Кто-то живёт в большем терме: собеседование провалено, терм узла устарел.
+                // Сам PreVote терм не двигал - это единственное место, где узел узнаёт новое.
                 await StepDownAsync(reply.Term, cancellationToken).ConfigureAwait(false);
 
                 return null;
@@ -382,7 +383,7 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         foreach (var reply in replies)
         {
-            if (reply is { Answered: true } && reply.Term > _state.CurrentTerm)
+            if (reply is { Answered: true } && RaftRoleTransitions.Decide(_state.CurrentTerm, reply.Term) == StepKind.StepDown)
             {
                 await StepDownAsync(reply.Term, cancellationToken).ConfigureAwait(false);
 
@@ -499,9 +500,9 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
                 continue;
             }
 
-            if (response.Term > _state.CurrentTerm)
+            if (RaftRoleTransitions.Decide(_state.CurrentTerm, response.Term) == StepKind.StepDown)
             {
-                // Пир живёт в большем term: лидер устарел, уходить надо сразу.
+                // Пир живёт в большем терме: лидер устарел, уходить надо сразу.
                 await StepDownAsync(response.Term, cancellationToken).ConfigureAwait(false);
 
                 return;
@@ -566,27 +567,22 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         try
         {
-            if (request.Term < _state.CurrentTerm)
+            switch (RaftRoleTransitions.Decide(_state.CurrentTerm, request.Term))
             {
-                // Отставший лидер: ответ с настоящим term - единственная подсказка, что он устарел.
-                return new AppendEntriesResponse(_state.CurrentTerm, Success: false);
-            }
+                case StepKind.Ignore:
+                    // Отставший лидер: ответ с настоящим термом - единственная подсказка, что он устарел.
+                    return new AppendEntriesResponse(_state.CurrentTerm, Success: false);
 
-            if (request.Term > _state.CurrentTerm)
-            {
-                // Новый term: сначала диск, потом роль. Всё, что принадлежало лидерству, умирает.
-                await StepDownAsync(request.Term, cancellationToken).ConfigureAwait(false);
-            }
-            else if (_state.Role != RaftRole.Follower)
-            {
-                // Равный term при роли кандидата или лидера: лидер этого term уже есть, и это не мы.
-                // Диск не трогаем - term тот же, а голос выдавать некому.
-                _progress.Clear();
-                _state.Role = RaftRole.Follower;
+                case StepKind.StepDown:
+                case StepKind.ProcessInTerm:
+                    // Оба случая - уход в follower: в большем терме это обязательно, а в своём
+                    // лидер этого терма уже есть, и это не мы (кандидат проиграл выборы).
+                    // Для своего терма StepDownAsync не пишет на диск: терм не вырос.
+                    await StepDownAsync(request.Term, cancellationToken).ConfigureAwait(false);
+                    break;
             }
 
             _state.LeaderId = request.Leader;
-            ResetElectionTimer();
 
             return new AppendEntriesResponse(_state.CurrentTerm, Success: true);
         }
@@ -596,16 +592,42 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         }
     }
 
-    /// <summary>Уход в follower по большему term: term на диск до смены роли.</summary>
+    /// <summary>
+    /// Уход в follower (<c>S2-T08</c>): единственное место, где меняются роль, терм и голос.
+    /// </summary>
+    /// <param name="newTerm">Терм, из-за которого уходим; текущий терм - «проиграли в этом же терме».</param>
+    /// <param name="cancellationToken">Отмена до записи на диск.</param>
+    /// <remarks>
+    /// <para>
+    /// На диск пишется только рост терма: смена роли без роста ничего не делает долговечным, а
+    /// голос в том же терме обязан остаться - второй голос в одном терме запрещён (§5.2).
+    /// Поэтому вызов идемпотентен: два шага с одним термом дают одну запись.
+    /// </para>
+    /// <para>
+    /// Здесь же умирают ресурсы роли: репликаторы и таймеры. Отправка после <c>StepDown</c> - это
+    /// сообщение устаревшего лидера, то есть путь к двум лидерам.
+    /// </para>
+    /// </remarks>
     private async ValueTask StepDownAsync(Term newTerm, CancellationToken cancellationToken)
     {
-        await _state.PersistAsync(newTerm, votedFor: null, cancellationToken).ConfigureAwait(false);
+        if (newTerm > _state.CurrentTerm)
+        {
+            await _state.PersistAsync(newTerm, votedFor: null, cancellationToken).ConfigureAwait(false);
+        }
 
-        // Репликаторы лидера умирают вместе с ролью: отправка после StepDown - это сообщение
-        // устаревшего лидера, то есть путь к двум лидерам (S2-T10 ловит это как инвариант).
-        _progress.Clear();
         _state.Role = RaftRole.Follower;
         _state.LeaderId = null;
+        LeaveRole();
+    }
+
+    /// <summary>Уборка ролевых ресурсов: репликаторы и сигнал таймера выборов.</summary>
+    /// <remarks>
+    /// Отдельно от <see cref="StepDownAsync"/>, потому что смену терма и голоса умеет и
+    /// <c>RequestVoteHandler</c> (одна запись на диск вместо двух), а уборка нужна всем путям.
+    /// </remarks>
+    private void LeaveRole()
+    {
+        _progress.Clear();
         ResetElectionTimer();
     }
 }
