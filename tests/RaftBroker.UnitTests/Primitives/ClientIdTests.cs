@@ -45,6 +45,9 @@ public sealed class ClientIdTests
         clientId.Value.Should().Be("client-1");
         clientId.ToString().Should().Be("client-1");
         (clientId > new ClientId("client-0")).Should().BeTrue();
+        (clientId >= new ClientId("client-1")).Should().BeTrue();
+        (clientId <= new ClientId("client-1")).Should().BeTrue();
+        (clientId < new ClientId("client-0")).Should().BeFalse();
     }
 
     [Fact]

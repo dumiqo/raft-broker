@@ -84,6 +84,8 @@ public sealed class NodeIdTests
         // сортировки, и именно поэтому порядок узлов в Raft не должен зависеть от имен.
         (ten < two).Should().BeTrue();
         (two > ten).Should().BeTrue();
+        (ten <= two).Should().BeTrue();
+        (ten >= two).Should().BeFalse();
         ten.CompareTo(two).Should().BeNegative();
     }
 

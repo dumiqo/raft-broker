@@ -7,7 +7,8 @@
 #   1. restore в locked-режиме - lock-файл должен совпадать с csproj, а не догоняться молча;
 #   2. сборка (в Directory.Build.props TreatWarningsAsErrors=true, то есть предупреждения - это ошибки);
 #   3. тесты, включая архитектурный тест границ слоёв (tests/RaftBroker.UnitTests/Architecture/LayerReferenceTests.cs);
-#   4. форматирование и стиль (dotnet format --verify-no-changes).
+#   4. покрытие строк src не ниже 85% (scripts/coverage.ps1, отчёт в artifacts/coverage/);
+#   5. форматирование и стиль (dotnet format --verify-no-changes).
 #
 # Скрипт намеренно не подключает scripts/_common.ps1: там проверки Docker, а гейт
 # должен работать на машине без Docker.
@@ -105,6 +106,12 @@ Invoke-GateStep -Name 'build (warnings as errors)' -Arguments @('build', $soluti
 # for 'dotnet test' should be via '--solution'" (см. docs/adr/0001-test-stack.md).
 # --no-build: сборка уже прошла шагом выше, второй раз она ничего не добавит.
 Invoke-GateStep -Name 'tests' -Arguments @('test', '--solution', $solution, '--configuration', $Configuration, '--no-build')
+
+# Порог покрытия проверяется тем же скриптом локально и в CI: непокрытый код в хранилище
+# означает непроверенное поведение на диске, а не "недописанный тест".
+Write-Host ''
+Write-Host '=== покрытие строк (порог 85%) ===' -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot 'coverage.ps1') -Configuration $Configuration
 
 Invoke-GateStep -Name 'format и стиль' -Arguments @('format', $solution, '--verify-no-changes', '--no-restore')
 

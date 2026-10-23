@@ -39,6 +39,10 @@ public sealed class OffsetTests
     {
         (Offset.Beginning < new Offset(1)).Should().BeTrue();
         (new Offset(1) > Offset.Beginning).Should().BeTrue();
+        (new Offset(1) <= new Offset(1)).Should().BeTrue();
+        (new Offset(1) >= new Offset(1)).Should().BeTrue();
+        new Offset(2).CompareTo(new Offset(1)).Should().BePositive();
+        new Offset(1).CompareTo(new Offset(2)).Should().BeNegative();
     }
 
     [Fact]

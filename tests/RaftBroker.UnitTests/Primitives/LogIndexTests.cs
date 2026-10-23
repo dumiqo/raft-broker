@@ -38,6 +38,10 @@ public sealed class LogIndexTests
     {
         (new LogIndex(1) < new LogIndex(2)).Should().BeTrue();
         (new LogIndex(2) > new LogIndex(1)).Should().BeTrue();
+        (new LogIndex(2) <= new LogIndex(2)).Should().BeTrue();
+        (new LogIndex(1) <= new LogIndex(2)).Should().BeTrue();
+        (new LogIndex(2) >= new LogIndex(1)).Should().BeTrue();
+        (new LogIndex(2) >= new LogIndex(2)).Should().BeTrue();
     }
 
     [Fact]

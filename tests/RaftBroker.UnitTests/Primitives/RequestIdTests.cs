@@ -20,6 +20,9 @@ public sealed class RequestIdTests
     {
         (new RequestId(1) < new RequestId(2)).Should().BeTrue();
         (new RequestId(ulong.MaxValue) > new RequestId(0)).Should().BeTrue();
+        (new RequestId(1) <= new RequestId(1)).Should().BeTrue();
+        (new RequestId(1) >= new RequestId(1)).Should().BeTrue();
+        new RequestId(2).CompareTo(new RequestId(1)).Should().BePositive();
     }
 
     [Fact]
