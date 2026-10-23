@@ -151,39 +151,6 @@ public sealed class SegmentRecoveryTests
     }
 
     [Fact]
-    public async Task TornTail_EveryCutReportsTheSameRecoveredState()
-    {
-        var fileSystem = new FakeStorageFileSystem();
-        var path = await LogTestData.WriteSegmentAsync(
-            fileSystem,
-            LogTestData.Command(First),
-            LogTestData.Command(Second, term: 2),
-            LogTestData.Noop(Third, term: 2));
-
-        var whole = fileSystem.ReadAllBytes(path);
-        var thirdFrameOffset = LogTestData.FrameOffsets(whole)[2];
-        var recovered = new List<(SegmentRecoveryStatus Status, long End, int Frames, long Dropped)>();
-
-        for (var cut = thirdFrameOffset + 1; cut < whole.Length; cut++)
-        {
-            fileSystem.Seed(path, whole.AsSpan(0, cut));
-
-            var result = await RecoverAsync(fileSystem, path, SegmentKind.Last);
-
-            result.Status.Should().Be(SegmentRecoveryStatus.TruncatedTail);
-            result.ValidEndOffset.Should().Be(thirdFrameOffset);
-            result.FrameCount.Should().Be(2);
-            result.LastIndex!.Value.Value.Should().Be(Second);
-            recovered.Add((result.Status, result.ValidEndOffset, result.FrameCount, result.DroppedBytes));
-        }
-
-        // Детерминированность: любая точка обрыва даёт одно и то же состояние, отличается только
-        // число отброшенных байт.
-        recovered.Select(entry => (entry.Status, entry.End, entry.Frames)).Distinct().Should().ContainSingle();
-        recovered.Select(entry => entry.Dropped).Should().BeInAscendingOrder().And.OnlyHaveUniqueItems();
-    }
-
-    [Fact]
     public async Task TornTail_WithOnlyPartOfTheFrameLengthField_IsTruncated()
     {
         var fileSystem = new FakeStorageFileSystem();

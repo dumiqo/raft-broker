@@ -135,6 +135,63 @@ public sealed class LogStoreTests
     }
 
     [Fact]
+    public async Task GetAsync_FindsRecordsInEverySegmentOfAThreeSegmentJournal()
+    {
+        // Три сегмента: 1 (1,2), 3 (3,4), 5 (5,6). Поиск идёт бинпоиском по базовым индексам,
+        // и ошибка «на один сегмент левее» видна только когда сегментов больше двух.
+        var fileSystem = new FakeStorageFileSystem();
+        await using var store = await OpenAsync(fileSystem, SegmentWithTwoFrames);
+        await store.AppendAsync(
+            [
+                LogTestData.Command(1),
+                LogTestData.Command(2),
+                LogTestData.Command(3, term: 2),
+                LogTestData.Command(4, term: 2),
+                LogTestData.Command(5, term: 9),
+                LogTestData.Command(6, term: 9),
+            ],
+            CancellationToken.None);
+
+        fileSystem.Paths.Should().Equal(
+            LogTestData.SegmentPath(1),
+            LogTestData.SegmentPath(3),
+            LogTestData.SegmentPath(5));
+
+        foreach (var (index, term) in new[] { (1, 1), (2, 1), (3, 2), (4, 2), (5, 9), (6, 9) })
+        {
+            var found = await store.GetAsync(new LogIndex(index), CancellationToken.None);
+
+            found.Status.Should().Be(LogLookupStatus.Found, "запись {0} лежит в сегменте", index);
+            found.Record!.Index.Value.Should().Be(index);
+            found.Record.Term.Value.Should().Be(term);
+        }
+
+        (await store.GetAsync(new LogIndex(7), CancellationToken.None)).Status.Should().Be(LogLookupStatus.NotYet);
+    }
+
+    [Fact]
+    public async Task Append_AfterCompactAsync_ContinuesTheJournalPastTheSnapshotBoundary()
+    {
+        // Компакция убирает сегменты ниже снапшота, но журнал продолжается: писатель стоит
+        // в последнем сегменте, и следующий rollover обязан создать файл выше границы, а не
+        // вернуться в удалённую историю.
+        var fileSystem = new FakeStorageFileSystem();
+        await using var store = await OpenAsync(fileSystem, SegmentWithTwoFrames);
+        await store.AppendAsync(
+            [LogTestData.Command(1), LogTestData.Command(2), LogTestData.Command(3), LogTestData.Command(4)],
+            CancellationToken.None);
+        await store.CompactAsync(new LogIndex(2), CancellationToken.None);
+
+        await store.AppendAsync([LogTestData.Command(5), LogTestData.Command(6)], CancellationToken.None);
+
+        fileSystem.Paths.Should().Equal(LogTestData.SegmentPath(3), LogTestData.SegmentPath(5));
+        store.FirstIndex.Value.Should().Be(3, "снапшот остаётся границей читаемой истории");
+        store.LastIndex.Value.Should().Be(6);
+        RecordsAt(fileSystem, 3).Select(record => record.Index.Value).Should().Equal(3, 4);
+        RecordsAt(fileSystem, 5).Select(record => record.Index.Value).Should().Equal(5, 6);
+    }
+
+    [Fact]
     public async Task ReadRangeAsync_ReadsAcrossSegmentsAndStopsAtMaxCount()
     {
         var fileSystem = new FakeStorageFileSystem();
@@ -206,26 +263,6 @@ public sealed class LogStoreTests
         store.LastIndex.Value.Should().Be(3);
         store.LastTerm.Value.Should().Be(5);
         RecordsAt(fileSystem, 1).Select(record => record.Term.Value).Should().Equal(1, 1, 5);
-    }
-
-    [Fact]
-    public async Task TruncateSuffixAsync_RemovesWholeSegmentsAboveTheCut()
-    {
-        var fileSystem = new FakeStorageFileSystem();
-        await using var store = await OpenAsync(fileSystem, SegmentWithTwoFrames);
-        await store.AppendAsync(
-            [LogTestData.Command(1), LogTestData.Command(2), LogTestData.Command(3), LogTestData.Command(4)],
-            CancellationToken.None);
-
-        await store.TruncateSuffixAsync(new LogIndex(3), CancellationToken.None);
-
-        fileSystem.Paths.Should().Equal(LogTestData.SegmentPath(1));
-        store.LastIndex.Value.Should().Be(2);
-
-        await store.AppendAsync([LogTestData.Command(3)], CancellationToken.None);
-
-        fileSystem.Paths.Should().Equal(LogTestData.SegmentPath(1), LogTestData.SegmentPath(3));
-        RecordsAt(fileSystem, 3).Select(record => record.Index.Value).Should().Equal(3);
     }
 
     [Fact]
@@ -442,18 +479,21 @@ public sealed class LogStoreTests
     }
 
     [Fact]
-    public async Task ReadRangeAsync_OnAnEmptyJournal_ReturnsNothing()
+    public async Task EmptyJournal_AnswersReadsWithoutTouchingTheDisk()
     {
+        // Чтение из пустого журнала - штатный случай на старте лидера без истории,
+        // а не ошибка: ответ «записи ещё нет», и ни одного открытия файла.
         var fileSystem = new FakeStorageFileSystem();
         await using var store = await OpenAsync(fileSystem);
 
-        var records = await store.ReadRangeAsync(new LogIndex(1), maxCount: 10, CancellationToken.None);
+        (await store.GetAsync(new LogIndex(1), CancellationToken.None)).Status.Should().Be(LogLookupStatus.NotYet);
+        (await store.ReadRangeAsync(new LogIndex(1), maxCount: 10, CancellationToken.None)).Should().BeEmpty();
 
-        records.Should().BeEmpty();
+        fileSystem.Operations.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task TruncateSuffixAsync_DeletesEverySegmentAboveTheCut()
+    public async Task TruncateSuffixAsync_RemovesWholeSegmentsAboveTheCut()
     {
         // Три сегмента: 1 (1,2), 3 (3,4), 5 (5,6). Обрезка с 3 убирает и 5, и 3 - файлов
         // выше точки обрезки остаться не должно, иначе следующий append создаст файл поверх.
@@ -507,15 +547,6 @@ public sealed class LogStoreTests
 
         fileSystem.Paths.Should().Equal(LogTestData.SegmentPath(1));
         store.LastIndex.Value.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task GetAsync_OnAJournalThatIsEmpty_ReportsNotYet()
-    {
-        var fileSystem = new FakeStorageFileSystem();
-        await using var store = await OpenAsync(fileSystem);
-
-        (await store.GetAsync(new LogIndex(1), CancellationToken.None)).Status.Should().Be(LogLookupStatus.NotYet);
     }
 
     [Fact]
