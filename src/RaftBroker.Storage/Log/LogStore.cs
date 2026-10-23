@@ -25,8 +25,12 @@ namespace RaftBroker.Storage.Log;
 /// если измерение покажет, что открытие файла дороже чтения (тогда - с ADR и тестом).
 /// </para>
 /// <para>
-/// Потокобезопасности нет: экземпляром владеет одна задача (актор узла). Это то же правило, что
-/// у <see cref="SegmentWriter"/>, и оно записано в контракте <see cref="ILogStore"/>.
+/// Мутации сериализованы внутри: <see cref="AppendAsync"/>, <see cref="FlushToDiskAsync"/>,
+/// <see cref="TruncateSuffixAsync"/>, <see cref="MarkCommittedAsync"/>, <see cref="CompactAsync"/>
+/// и <see cref="DisposeAsync"/> проходят через одни воротца (<c>SemaphoreSlim</c>), потому что
+/// <see cref="SegmentWriter"/> однопоточный по построению (ADR <c>0011-log-store-concurrency.md</c>).
+/// Чтения воротца не берут и видят опубликованный снимок каталога: медленный читатель не может
+/// задержать запись, а писатель не может показать читателю каталог, который ещё меняется.
 /// </para>
 /// </remarks>
 public sealed class LogStore : ILogStore
@@ -36,9 +40,17 @@ public sealed class LogStore : ILogStore
     private readonly SegmentWriterOptions _options;
     private readonly List<SegmentInfo> _segments = [];
 
+    /// <summary>Воротца мутаций: писатель один, поэтому очередь из них не нужна.</summary>
+    private readonly SemaphoreSlim _writeGate = new(initialCount: 1, maxCount: 1);
+
+    private volatile LogView _view = LogView.Empty;
+
     private SegmentWriter? _writer;
     private int _observedCreatedSegments;
     private LogIndex _snapshotIndex;
+    private LogIndex _lastIndex;
+    private Term _lastTerm;
+    private LogIndex _committedIndex;
     private bool _disposed;
 
     private LogStore(IStorageFileSystem fileSystem, IClock clock, SegmentWriterOptions options)
@@ -49,28 +61,20 @@ public sealed class LogStore : ILogStore
     }
 
     /// <inheritdoc />
-    public LogIndex FirstIndex
-    {
-        get
-        {
-            // Снапшот сжимает историю логически, даже если её сегмент ещё лежит на диске:
-            // читать записи ниже снапшота нельзя (R4: снапшот плюс хвост лога).
-            var afterSnapshot = _snapshotIndex.Next();
-
-            return _segments.Count == 0
-                ? afterSnapshot
-                : (afterSnapshot > _segments[0].BaseIndex ? afterSnapshot : _segments[0].BaseIndex);
-        }
-    }
+    /// <remarks>
+    /// Читается из опубликованного снимка: четыре поля журнала согласованы между собой, и брать
+    /// их по одному из живых полей значило бы отдавать наружу смесь двух состояний.
+    /// </remarks>
+    public LogIndex FirstIndex => _view.FirstIndex;
 
     /// <inheritdoc />
-    public LogIndex LastIndex { get; private set; }
+    public LogIndex LastIndex => _view.LastIndex;
 
     /// <inheritdoc />
-    public Term LastTerm { get; private set; }
+    public Term LastTerm => _view.LastTerm;
 
     /// <inheritdoc />
-    public LogIndex CommittedIndex { get; private set; }
+    public LogIndex CommittedIndex => _view.CommittedIndex;
 
     /// <summary>Открывает журнал в каталоге из настроек.</summary>
     /// <param name="fileSystem">Файловая система: рантайм-реализация или тестовый дубль.</param>
@@ -161,6 +165,8 @@ public sealed class LogStore : ILogStore
 
         if (entries.Count == 0)
         {
+            store.PublishView();
+
             return LogStoreOpenResult.Success(store, LogRecoveryReport.For(repairs, store));
         }
 
@@ -168,15 +174,15 @@ public sealed class LogStore : ILogStore
 
         if (last.LastIndex is { } lastIndex)
         {
-            store.LastIndex = lastIndex;
-            store.LastTerm = last.LastTerm!.Value;
+            store._lastIndex = lastIndex;
+            store._lastTerm = last.LastTerm!.Value;
         }
         else if (entries.Count > 1)
         {
             // Последний сегмент пуст (только заголовок, §8): журнал кончается предыдущим сегментом,
             // и продолжаем мы именно его данные.
-            store.LastIndex = entries[^2].LastIndex!.Value;
-            store.LastTerm = entries[^2].LastTerm!.Value;
+            store._lastIndex = entries[^2].LastIndex!.Value;
+            store._lastTerm = entries[^2].LastTerm!.Value;
         }
 
         // Иначе журнал пуст: последний (и единственный) сегмент - пустой файл с базовым индексом
@@ -188,13 +194,14 @@ public sealed class LogStore : ILogStore
             new SegmentResumeState
             {
                 BaseIndex = last.BaseIndex,
-                LastIndex = store.LastIndex,
-                LastTerm = store.LastTerm,
+                LastIndex = store._lastIndex,
+                LastTerm = store._lastTerm,
                 Length = last.Length,
             },
             cancellationToken).ConfigureAwait(false);
 
         store._observedCreatedSegments = store._writer.CreatedSegmentBaseIndexes.Count;
+        store.PublishView();
 
         return LogStoreOpenResult.Success(store, LogRecoveryReport.For(repairs, store));
     }
@@ -251,25 +258,51 @@ public sealed class LogStore : ILogStore
             return;
         }
 
-        ValidateAppendStart(records);
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        // Писатель создаётся лениво: у открытого непустого журнала он уже есть (ResumeAsync),
-        // а у пустого каталога первый сегмент появляется только с первой записью.
-        _writer ??= new SegmentWriter(_fileSystem, _clock, _options);
+        try
+        {
+            ValidateAppendStart(records);
 
-        await _writer.AppendAsync(records, mode, cancellationToken).ConfigureAwait(false);
+            // Писатель создаётся лениво: у открытого непустого журнала он уже есть (ResumeAsync),
+            // а у пустого каталога первый сегмент появляется только с первой записью.
+            _writer ??= new SegmentWriter(_fileSystem, _clock, _options);
 
-        TrackCreatedSegments();
-        LastIndex = _writer.LastIndex ?? LastIndex;
-        LastTerm = _writer.LastTerm ?? LastTerm;
+            await _writer.AppendAsync(records, mode, cancellationToken).ConfigureAwait(false);
+
+            TrackCreatedSegments();
+            _lastIndex = _writer.LastIndex ?? _lastIndex;
+            _lastTerm = _writer.LastTerm ?? _lastTerm;
+            PublishView();
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
     }
 
     /// <inheritdoc />
-    public ValueTask FlushToDiskAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// Тоже под воротцами: <see cref="SegmentWriter"/> не потокобезопасен, а flush пишет в тот же
+    /// дескриптор, что и append. Снимок каталога flush не меняет - он не двигает ни индексов, ни термов.
+    /// </remarks>
+    public async ValueTask FlushToDiskAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        return _writer is null ? ValueTask.CompletedTask : _writer.FlushToDiskAsync(cancellationToken);
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (_writer is not null)
+            {
+                await _writer.FlushToDiskAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
     }
 
     /// <inheritdoc />
@@ -283,24 +316,28 @@ public sealed class LogStore : ILogStore
         // Порядок проверок важен: сначала «это уже снапшот», потом «этого ещё нет».
         // Для индекса ниже журнала оба ответа были бы верны, и выбор между ними решает,
         // получит follower снапшот или продолжение репликации.
-        if (index.Value < FirstIndex.Value)
+        // Снимок берётся один раз: границы, сегменты и позиция обязаны быть из одного состояния,
+        // иначе поиск сегмента может попасть в список, который уже укорочен обрезкой.
+        var view = _view;
+
+        if (index.Value < view.FirstIndex.Value)
         {
             return LogLookupResult.Compacted();
         }
 
-        if (index > LastIndex)
+        if (index > view.LastIndex)
         {
             return LogLookupResult.NotYet();
         }
 
-        var position = FindSegmentPosition(index);
+        var position = FindSegmentPosition(view.Segments, index);
 
         if (position < 0)
         {
             return LogLookupResult.NotYet();
         }
 
-        var reader = await OpenScannedAsync(_segments[position].Path, cancellationToken).ConfigureAwait(false);
+        var reader = await OpenScannedAsync(view.Segments[position].Path, cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -327,15 +364,17 @@ public sealed class LogStore : ILogStore
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
 
-        if (from.Value < FirstIndex.Value)
+        var view = _view;
+
+        if (from.Value < view.FirstIndex.Value)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(from),
                 from.Value,
-                $"Начало доступной истории - {FirstIndex}: записи ниже вошли в снапшот и не читаются.");
+                $"Начало доступной истории - {view.FirstIndex}: записи ниже вошли в снапшот и не читаются.");
         }
 
-        var position = FindSegmentPosition(from);
+        var position = FindSegmentPosition(view.Segments, from);
 
         if (position < 0)
         {
@@ -344,16 +383,16 @@ public sealed class LogStore : ILogStore
 
         var records = new List<LogRecord>(maxCount);
 
-        for (; position < _segments.Count && records.Count < maxCount; position++)
+        for (; position < view.Segments.Length && records.Count < maxCount; position++)
         {
-            var segment = _segments[position];
+            var segment = view.Segments[position];
             var lower = from > segment.BaseIndex ? from : segment.BaseIndex;
 
             // Конец сегмента - это начало следующего минус один; у последнего сегмента конец
             // журнала. Пустой последний сегмент даёт верх меньше нижней границы: читать нечего.
-            var upper = position + 1 < _segments.Count
-                ? new LogIndex(_segments[position + 1].BaseIndex.Value - 1)
-                : LastIndex;
+            var upper = position + 1 < view.Segments.Length
+                ? new LogIndex(view.Segments[position + 1].BaseIndex.Value - 1)
+                : view.LastIndex;
 
             if (lower > upper)
             {
@@ -396,29 +435,42 @@ public sealed class LogStore : ILogStore
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var immutable = CommittedIndex > _snapshotIndex ? CommittedIndex : _snapshotIndex;
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await TruncateSuffixCoreAsync(from).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    /// <summary>Обрезка хвоста; вызывается только под воротцами мутаций.</summary>
+    private async ValueTask TruncateSuffixCoreAsync(LogIndex from)
+    {
+        var immutable = _committedIndex > _snapshotIndex ? _committedIndex : _snapshotIndex;
 
         if (from <= immutable)
         {
             throw new InvalidOperationException(
-                $"Обрезка с индекса {from} затрагивает неизменяемую историю: точка коммита {CommittedIndex}, снапшот {_snapshotIndex}. Закоммиченная запись не удаляется (R4).");
+                $"Обрезка с индекса {from} затрагивает неизменяемую историю: точка коммита {_committedIndex}, снапшот {_snapshotIndex}. Закоммиченная запись не удаляется (R4).");
         }
 
-        if (from > LastIndex)
+        if (from > _lastIndex)
         {
             return;
         }
-
-        cancellationToken.ThrowIfCancellationRequested();
 
         // Писатель обязан быть закрыт до удаления файлов и укорачивания сегмента: открытый
         // пишущий дескриптор на Windows не даёт усечь файл, а на Unix писал бы в удалённый inode.
         await CloseWriterAsync().ConfigureAwait(false);
 
-        var position = FindSegmentPosition(from);
+        var position = FindSegmentPosition(_segments, from);
         var segment = _segments[position];
 
-        // Дальше идут разрушающие действия подряд: отмена проверена выше, потому что
+        // Дальше идут разрушающие действия подряд: отмена проверена воротцами, потому что
         // полуобрезанный журнал хуже, чем необрезанный.
         for (var later = _segments.Count - 1; later > position; later--)
         {
@@ -434,14 +486,14 @@ public sealed class LogStore : ILogStore
 
             if (_segments.Count == 0)
             {
-                LastIndex = LogIndex.Empty;
-                LastTerm = default;
+                _lastIndex = LogIndex.Empty;
+                _lastTerm = default;
             }
             else
             {
                 var tail = await ReadTailStateAsync(CancellationToken.None).ConfigureAwait(false);
-                LastIndex = tail.LastIndex;
-                LastTerm = tail.LastTerm;
+                _lastIndex = tail.LastIndex;
+                _lastTerm = tail.LastTerm;
                 _writer = await ResumeWriterAsync(tail, CancellationToken.None).ConfigureAwait(false);
             }
         }
@@ -460,8 +512,8 @@ public sealed class LogStore : ILogStore
                     ?? throw new InvalidOperationException(
                         $"Сегмент '{segment.Path}' не содержит записи {from.Value - 1}, хотя обрезка начинается с {from}.");
 
-                LastIndex = survivor.Index;
-                LastTerm = survivor.Term;
+                _lastIndex = survivor.Index;
+                _lastTerm = survivor.Term;
 
                 await _fileSystem.TruncateAsync(segment.Path, offset, CancellationToken.None).ConfigureAwait(false);
 
@@ -482,34 +534,42 @@ public sealed class LogStore : ILogStore
         }
 
         _observedCreatedSegments = _writer?.CreatedSegmentBaseIndexes.Count ?? 0;
+        PublishView();
     }
 
     /// <inheritdoc />
     /// <exception cref="InvalidOperationException">
     /// Точка коммита не ходит назад: R4 запрещает объявлять закоммиченное незакоммиченным.
     /// </exception>
-    public ValueTask MarkCommittedAsync(LogIndex index, CancellationToken cancellationToken)
+    public async ValueTask MarkCommittedAsync(LogIndex index, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        cancellationToken.ThrowIfCancellationRequested();
 
-        if (index < CommittedIndex)
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
         {
-            throw new InvalidOperationException(
-                $"Точка коммита не ходит назад: текущая {CommittedIndex}, получено {index}.");
-        }
+            if (index < _committedIndex)
+            {
+                throw new InvalidOperationException(
+                    $"Точка коммита не ходит назад: текущая {_committedIndex}, получено {index}.");
+            }
 
-        if (index > LastIndex)
+            if (index > _lastIndex)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(index),
+                    index.Value,
+                    $"Точка коммита {index} больше последней записи журнала {_lastIndex}: коммитить нечего.");
+            }
+
+            _committedIndex = index;
+            PublishView();
+        }
+        finally
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(index),
-                index.Value,
-                $"Точка коммита {index} больше последней записи журнала {LastIndex}: коммитить нечего.");
+            _writeGate.Release();
         }
-
-        CommittedIndex = index;
-
-        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -521,53 +581,71 @@ public sealed class LogStore : ILogStore
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (snapshotIndex < _snapshotIndex)
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(snapshotIndex),
-                snapshotIndex.Value,
-                $"Снапшот не ходит назад: текущий {_snapshotIndex}.");
-        }
+            if (snapshotIndex < _snapshotIndex)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(snapshotIndex),
+                    snapshotIndex.Value,
+                    $"Снапшот не ходит назад: текущий {_snapshotIndex}.");
+            }
 
-        if (snapshotIndex > LastIndex)
+            if (snapshotIndex > _lastIndex)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(snapshotIndex),
+                    snapshotIndex.Value,
+                    $"Снапшот на индекс {snapshotIndex} больше последней записи {_lastIndex}.");
+            }
+
+            // Удаляется сегмент, только если он запечатан и его конец покрыт снапшотом. Последний
+            // сегмент не удаляется никогда: он продолжает журнал (нужен для prevLogTerm).
+            var removable = 0;
+
+            while (removable + 1 < _segments.Count
+                && new LogIndex(_segments[removable + 1].BaseIndex.Value - 1) <= snapshotIndex)
+            {
+                removable++;
+            }
+
+            for (var position = 0; position < removable; position++)
+            {
+                await _fileSystem.DeleteAsync(_segments[position].Path, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            _segments.RemoveRange(0, removable);
+            _snapshotIndex = snapshotIndex;
+            PublishView();
+        }
+        finally
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(snapshotIndex),
-                snapshotIndex.Value,
-                $"Снапшот на индекс {snapshotIndex} больше последней записи {LastIndex}.");
+            _writeGate.Release();
         }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // Удаляется сегмент, только если он запечатан и его конец покрыт снапшотом. Последний
-        // сегмент не удаляется никогда: он продолжает журнал (нужен для prevLogTerm).
-        var removable = 0;
-
-        while (removable + 1 < _segments.Count
-            && new LogIndex(_segments[removable + 1].BaseIndex.Value - 1) <= snapshotIndex)
-        {
-            removable++;
-        }
-
-        for (var position = 0; position < removable; position++)
-        {
-            await _fileSystem.DeleteAsync(_segments[position].Path, CancellationToken.None).ConfigureAwait(false);
-        }
-
-        _segments.RemoveRange(0, removable);
-        _snapshotIndex = snapshotIndex;
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
-        {
-            return;
-        }
+        // Воротца и здесь: закрывать писатель, пока append пишет в него, нельзя.
+        await _writeGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
 
-        _disposed = true;
-        await CloseWriterAsync().ConfigureAwait(false);
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            await CloseWriterAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
     }
 
     /// <summary>Проверяет, что первая запись продолжает журнал.</summary>
@@ -579,7 +657,7 @@ public sealed class LogStore : ILogStore
     {
         ArgumentNullException.ThrowIfNull(records[0], nameof(records));
 
-        var expected = LastIndex.Value > 0 ? LastIndex.Next() : FirstIndex;
+        var expected = _lastIndex.Value > 0 ? _lastIndex.Next() : ComputeFirstIndex(_segments);
 
         if (records[0].Index != expected)
         {
@@ -615,17 +693,21 @@ public sealed class LogStore : ILogStore
     }
 
     /// <summary>Позиция последнего сегмента с базовым индексом не выше указанного; -1, если таких нет.</summary>
-    private int FindSegmentPosition(LogIndex index)
+    /// <remarks>
+    /// Список сегментов передаётся снаружи: писатель ищет по живому списку, читатель - по
+    /// опубликованному снимку, и снимок не должен меняться под ногами.
+    /// </remarks>
+    private static int FindSegmentPosition(IReadOnlyList<SegmentInfo> segments, LogIndex index)
     {
         var low = 0;
-        var high = _segments.Count - 1;
+        var high = segments.Count - 1;
         var found = -1;
 
         while (low <= high)
         {
             var middle = low + ((high - low) / 2);
 
-            if (_segments[middle].BaseIndex <= index)
+            if (segments[middle].BaseIndex <= index)
             {
                 found = middle;
                 low = middle + 1;
@@ -718,6 +800,43 @@ public sealed class LogStore : ILogStore
         var writer = _writer;
         _writer = null;
         await writer.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Пересобирает снимок каталога и публикует его читателям; вызывается под воротцами.</summary>
+    /// <remarks>
+    /// Массив копируется, а не публикуется живой список: читатель держит снимок на время чтения
+    /// файлов, а обрезка и удаление меняют список. Копия из одного-двух элементов дешевле любой
+    /// блокировки и не даёт читателю увидеть половину изменения.
+    /// </remarks>
+    private void PublishView()
+    {
+        var segments = _segments.ToArray();
+
+        _view = new LogView(segments, ComputeFirstIndex(segments), _lastIndex, _lastTerm, _committedIndex);
+    }
+
+    /// <summary>Первый читаемый индекс журнала с учётом снапшота и первого сегмента.</summary>
+    private LogIndex ComputeFirstIndex(IReadOnlyList<SegmentInfo> segments)
+    {
+        // Снапшот сжимает историю логически, даже если её сегмент ещё лежит на диске:
+        // читать записи ниже снапшота нельзя (R4: снапшот плюс хвост лога).
+        var afterSnapshot = _snapshotIndex.Next();
+
+        return segments.Count == 0
+            ? afterSnapshot
+            : (afterSnapshot > segments[0].BaseIndex ? afterSnapshot : segments[0].BaseIndex);
+    }
+
+    /// <summary>Согласованный снимок состояния журнала для читателей.</summary>
+    private sealed record LogView(
+        SegmentInfo[] Segments,
+        LogIndex FirstIndex,
+        LogIndex LastIndex,
+        Term LastTerm,
+        LogIndex CommittedIndex)
+    {
+        /// <summary>Пустой журнал: до открытия читать нечего.</summary>
+        public static LogView Empty { get; } = new([], LogIndex.Empty.Next(), LogIndex.Empty, default, LogIndex.Empty);
     }
 
     private readonly record struct SegmentInfo(LogIndex BaseIndex, string Path);

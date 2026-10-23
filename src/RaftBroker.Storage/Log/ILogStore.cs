@@ -18,6 +18,14 @@ namespace RaftBroker.Storage.Log;
 /// закоммиченную историю (чек-лист R1, пункт 4).
 /// </para>
 /// <para>
+/// Конкурентность (<c>S1-T08</c>, ADR <c>0011-log-store-concurrency.md</c>): мутации
+/// (<see cref="AppendAsync()"/>, <see cref="FlushToDiskAsync"/>, <see cref="TruncateSuffixAsync"/>,
+/// <see cref="MarkCommittedAsync"/>, <see cref="CompactAsync"/>, <see cref="DisposeAsync"/>)
+/// сериализуются внутри реализации, а чтения воротца не берут и видят опубликованный снимок
+/// каталога. Порядок вызовов по-прежнему на вызывающем: гонка двух append-ов за один индекс -
+/// его ошибка, а не очередь внутри журнала.
+/// </para>
+/// <para>
 /// Числа логического журнала для пустого журнала: <see cref="LastIndex"/> = 0,
 /// <see cref="FirstIndex"/> = 1, <see cref="LastTerm"/> = 0 - ровно то, что
 /// <see cref="LogIndex.Empty"/> называет "журнал пуст" (<c>LogIndex</c> нумерует записи с единицы).

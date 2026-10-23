@@ -31,6 +31,24 @@ public sealed class SegmentReaderTests
     private static int ThirdFrameOffset => SecondFrameOffset + LogFrameCodec.GetFrameSize(4);
 
     [Fact]
+    public async Task Open_WhenHeaderReadIsCancelled_ClosesTheFile()
+    {
+        // Отмена внутри чтения заголовка не должна оставлять открытый дескриптор: на Windows
+        // занятый файл не даёт обрезке и компакции удалить сегмент.
+        var fileSystem = new FakeStorageFileSystem();
+        var path = await LogTestData.WriteSegmentAsync(fileSystem, LogTestData.Command(1));
+
+        fileSystem.FailureInjector = operation => operation.Kind == StorageOperationKind.Read
+            ? new OperationCanceledException("чтение заголовка отменено")
+            : null;
+
+        Func<Task> open = async () => await SegmentReader.OpenAsync(fileSystem, path, CancellationToken.None);
+
+        await open.Should().ThrowAsync<OperationCanceledException>();
+        fileSystem.OpenReadFileCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task Open_ReadsHeaderAndExposesPathAndLength()
     {
         var fileSystem = new FakeStorageFileSystem();

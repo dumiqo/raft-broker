@@ -104,7 +104,21 @@ public sealed class SegmentReader : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         var file = await fileSystem.OpenReadAsync(path, cancellationToken).ConfigureAwait(false);
-        var result = await ReadHeaderAsync(file, path, cancellationToken).ConfigureAwait(false);
+
+        SegmentOpenResult result;
+
+        // Отмена внутри чтения заголовка (или любой отказ файла) обязана закрыть уже открытый
+        // дескриптор: иначе читатель, прерванный отменой, оставляет файл занятым до финализатора,
+        // и на Windows это ломает удаление сегмента обрезкой или компакцией.
+        try
+        {
+            result = await ReadHeaderAsync(file, path, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await file.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
 
         if (!result.IsSuccess)
         {
