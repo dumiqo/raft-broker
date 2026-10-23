@@ -6,8 +6,8 @@
 | Этап | Спецификация | Состояние |
 |---|---|---|
 | S0 - Foundations | в хранилище владельца (этап закрыт, спека стала историей) | код закрыт, гейт `R0` открыт |
-| S1 - Durable log and snapshots | `01 - Durable log and snapshots.md` | в работе: закрыты `S1-T01`..`S1-T05` |
-| S2 - Raft roles and elections | переедет, когда этап стартует | open |
+| S1 - Durable log and snapshots | `01 - Durable log and snapshots.md` | код закрыт: `S1-T01`..`S1-T11`, гейт `R1` открыт |
+| S2 - Raft roles and elections | `02 - Raft roles and elections.md` | в работе: `S2-T01` |
 | S3 - Replication and commit | переедет, когда этап стартует | open |
 | S4 - gRPC transport | переедет, когда этап стартует | open |
 | S5 - Queue state machine | переедет, когда этап стартует | open |
