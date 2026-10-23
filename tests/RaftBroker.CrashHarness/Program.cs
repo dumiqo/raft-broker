@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Globalization;
 using RaftBroker.Core.Primitives;
+using RaftBroker.Storage.HardState;
 using RaftBroker.Storage.Integrity;
 using RaftBroker.Storage.IO;
 using RaftBroker.Storage.Log;
@@ -60,10 +61,16 @@ internal static class Program
                     ParseCount(snapshotIndex, nameof(snapshotIndex)),
                     ParseCount(stateBytes, nameof(stateBytes))),
 
+                ["hard-state", var directory, var term, var votedFor] => await WriteHardStateAsync(
+                    directory,
+                    ParseCount(term, nameof(term)),
+                    votedFor == "-" ? null : new NodeId(votedFor)),
+
                 _ => throw new ArgumentException(
                     "Использование: RaftBroker.CrashHarness torn-frame <каталог> <записей> <байтов фрейма> "
                     + "| torn-header <каталог> <байтов заголовка> "
-                    + "| snapshot-mid-write <каталог> <индекс> <байтов состояния>."),
+                    + "| snapshot-mid-write <каталог> <индекс> <байтов состояния> "
+                    + "| hard-state <каталог> <term> <узел|->."),
             };
 
             Console.Out.WriteLine($"READY {path}");
@@ -188,6 +195,18 @@ internal static class Program
         await file.FlushToDiskAsync(CancellationToken.None);
 
         return path;
+    }
+
+    /// <summary>
+    /// Записывает hard state и ждёт смерти процесса (<c>S2-T02</c>): голос на устройстве
+    /// до возврата управления, поэтому после <c>Kill</c> он обязан читаться.
+    /// </summary>
+    private static async ValueTask<string> WriteHardStateAsync(string directory, int term, NodeId? votedFor)
+    {
+        var store = new HardStateStore(SystemStorageFileSystem.Instance, directory);
+        await store.WriteAsync(new HardState(new Term(term), votedFor), CancellationToken.None);
+
+        return store.FilePath;
     }
 
     private static async Task WriteFrameAsync(IStorageFile file, LogRecord record)
