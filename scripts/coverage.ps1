@@ -1,9 +1,15 @@
 ﻿# Измерение покрытия строк (S1-T06).
 #
-# Порог 85% - не пожелание, а условие: непокрытый код в хранилище и Raft означает
+# Порог - не пожелание, а условие: непокрытый код в хранилище и Raft означает
 # непроверенное поведение на диске. Порог проверяется по всему src разом, а не по
 # каждому файлу: пустой обработчик отказа может честно жить без теста, но слой,
 # который наполовину не покрыт, - нет.
+#
+# Цифра меряется только в Release, независимо от конфигурации гейта. Причина
+# механическая: в Debug компилятор оставляет секвенс-поинты на каждой строке, и
+# непокрытых строк насчитывается на треть больше при том же коде (1280 против 1690
+# на S1-T06). Сравнивать Release-порог с Debug-числом значило бы валить гейт за
+# разницу в инструментарии, а не за разницу в покрытии.
 #
 # Скрипт запускает тесты ещё раз, уже под инструментом сбора: обычный прогон
 # (шаг 'tests' в verify.ps1) остаётся быстрым и не зависит от установленного
@@ -11,10 +17,11 @@
 
 [CmdletBinding()]
 param(
+    # Не 'Debug': порог откалиброван по Release (см. комментарий выше).
     [ValidateSet('Debug', 'Release')]
     [string] $Configuration = 'Release',
 
-    [double] $MinimumLineCoverage = 85,
+    [double] $MinimumLineCoverage = 98.5,
 
     # Отчёт в формате Cobertura: его читают и CI-скрипты, и глазами тоже.
     [string] $ReportPath = 'artifacts/coverage/coverage.cobertura.xml'
@@ -43,7 +50,9 @@ if (-not [string]::IsNullOrEmpty($reportDirectory)) {
     New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
 }
 
-$testCommand = "dotnet test --solution `"$solution`" --configuration $Configuration --no-build"
+# --no-build: Release уже собран гейтом (verify.ps1). Если гейт запускали в Debug,
+# сборка Release случится здесь же, поэтому цифра остаётся сравнимой с порогом.
+$testCommand = "dotnet test --solution `"$solution`" --configuration $Configuration"
 
 dotnet dotnet-coverage collect $testCommand --output-format cobertura --output $ReportPath
 if ($LASTEXITCODE -ne 0) {
