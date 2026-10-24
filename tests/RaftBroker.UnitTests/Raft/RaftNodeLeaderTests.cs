@@ -217,6 +217,21 @@ public sealed class RaftNodeLeaderTests
     }
 
     [Fact]
+    public async Task StepAsync_WhenTheHeartbeatHandlerThrows_LetsTheExceptionOut()
+    {
+        // Arrange: сбой в обработчике пира - баг, а не недоступный пир: лидер не должен
+        // принимать его за «нет ответа» и уходить в follower по CheckQuorum на пустом месте.
+        await using var cluster = await CreateElectedClusterAsync();
+        cluster.Network.Register(Third, new HeartbeatPeer(broken: true));
+
+        // Act
+        var act = async () => await cluster.AdvanceAsync(Heartbeat);
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
     public async Task HandleAppendEntriesAsync_WithTheSameTerm_TurnsACandidateIntoAFollowerWithoutWriting()
     {
         // Arrange: первый узел сам объявил выборы в term 1, но кворума не собрал.
@@ -259,8 +274,8 @@ public sealed class RaftNodeLeaderTests
         options.HeartbeatInterval.Should().Be(Timeout / 3);
     }
 
-    /// <summary>Пир, который отвечает на heartbeat заданным значением или отменой.</summary>
-    private sealed class HeartbeatPeer(AppendEntriesResponse? response = null, bool cancelled = false) : IRaftMessageHandler
+    /// <summary>Пир, который отвечает на heartbeat заданным значением, отменой или падением.</summary>
+    private sealed class HeartbeatPeer(AppendEntriesResponse? response = null, bool cancelled = false, bool broken = false) : IRaftMessageHandler
     {
         public ValueTask<RequestVoteResponse> HandleRequestVoteAsync(
             RequestVoteRequest request,
@@ -275,9 +290,16 @@ public sealed class RaftNodeLeaderTests
         public ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
             AppendEntriesRequest request,
             CancellationToken cancellationToken)
-            => cancelled
+        {
+            if (broken)
+            {
+                return ValueTask.FromException<AppendEntriesResponse>(new InvalidOperationException("сбой в обработчике"));
+            }
+
+            return cancelled
                 ? ValueTask.FromException<AppendEntriesResponse>(new OperationCanceledException())
                 : ValueTask.FromResult(response ?? new AppendEntriesResponse(request.Term, Success: true));
+        }
     }
 
     private static AppendEntriesRequest Heartbeat2(NodeId leader, long term)

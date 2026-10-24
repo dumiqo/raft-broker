@@ -210,6 +210,21 @@ public sealed class RaftNodeElectionTests
     }
 
     [Fact]
+    public async Task StepAsync_WhenAPeerHandlerThrows_LetsTheExceptionOut()
+    {
+        // Arrange: сбой внутри обработчика пира - не «ответа нет». Проглотив его, узел скрыл бы баг
+        // за медленными выборами, и фаззер S2-T10 не увидел бы нарушения вовсе.
+        await using var cluster = await CreateClusterAsync();
+        cluster.Network.Register(Second, new BrokenPeer());
+
+        // Act
+        var act = async () => await cluster.AdvanceAsync(Timeout);
+
+        // Assert
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
     public async Task StepAsync_WhenTheTransportIsCancelled_LetsTheCancellationOut()
     {
         // Arrange: отмена - это не «пир не ответил», её нельзя проглатывать.
@@ -264,6 +279,25 @@ public sealed class RaftNodeElectionTests
             AppendEntriesRequest request,
             CancellationToken cancellationToken)
             => ValueTask.FromResult(new AppendEntriesResponse(request.Term, Success: true));
+    }
+
+    /// <summary>Пир, у которого обработчик падает: так выглядит баг в чужом узле.</summary>
+    private sealed class BrokenPeer : IRaftMessageHandler
+    {
+        public ValueTask<RequestVoteResponse> HandleRequestVoteAsync(
+            RequestVoteRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<RequestVoteResponse>(new InvalidOperationException("сбой в обработчике"));
+
+        public ValueTask<PreVoteResponse> HandlePreVoteAsync(
+            PreVoteRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<PreVoteResponse>(new InvalidOperationException("сбой в обработчике"));
+
+        public ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
+            AppendEntriesRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromException<AppendEntriesResponse>(new InvalidOperationException("сбой в обработчике"));
     }
 
     /// <summary>Пир, отвечающий отменой: так выглядит истёкший deadline в настоящем транспорте.</summary>

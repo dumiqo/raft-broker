@@ -358,10 +358,11 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         {
             throw;
         }
-        catch (Exception)
+        catch (PeerUnreachableException)
         {
-            // Любой сбой связи - это «ответа нет», а не повод остановить раунд: кворум могли
-            // дать остальные, и обрыв до одного пира не должен срывать выборы.
+            // Сбой связи - это «ответа нет», а не повод остановить раунд: кворум могли дать
+            // остальные, и обрыв до одного пира не должен срывать выборы. Ловится только
+            // объявленный отказ транспорта: чужой сбой обязан лететь наверх.
             return new ElectionReply(peer, default, Granted: false, Answered: false);
         }
     }
@@ -560,9 +561,10 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         {
             throw;
         }
-        catch (Exception)
+        catch (PeerUnreachableException)
         {
             // Пир недоступен: лидер без кворума узнает об этом из CheckQuorum (S2-T09), а не здесь.
+            // Ловится только объявленный отказ транспорта: сбой в обработчике пира - не «нет ответа».
             return new AppendEntriesReply(peer, null);
         }
     }
