@@ -219,6 +219,26 @@ public sealed class RaftNodeCheckQuorumTests
     }
 
     [Fact]
+    public async Task StepAsync_WhenPeersAnswerWithoutSuccess_StillCountsThemAsAlive()
+    {
+        // Arrange: в S3 отставший, но живой follower отвечает Success: false. «Ответил» - это не
+        // «журнал совпал»: иначе CheckQuorum снимал бы исправного лидера из-за чужого отставания.
+        await using var cluster = await CreateElectedClusterAsync();
+        cluster.Network.Register(Second, new RefusingPeer());
+        cluster.Network.Register(Third, new RefusingPeer());
+
+        // Голоса ушедших в выборы узлов до лидера не доходят: тест следит только за его окном.
+        cluster.Network.Partition(Second, First);
+        cluster.Network.Partition(Third, First);
+
+        // Act: ровно окно после выборов.
+        await cluster.AdvanceAsync(Timeout);
+
+        // Assert
+        cluster[First].Role.Should().Be(RaftRole.Leader);
+    }
+
+    [Fact]
     public void Options_EnableCheckQuorumByDefault()
     {
         new RaftNodeOptions(First, ElectionTimerOptions.Default).CheckQuorum.Should().BeTrue();
@@ -226,6 +246,25 @@ public sealed class RaftNodeCheckQuorumTests
 
     private static RequestVoteRequest NewCandidateRequest(NodeId candidate, Term term)
         => new(candidate, term, LogIndex.Empty, new Term(0));
+
+    /// <summary>Пир, который слышит лидера, но журнал у себя не подтверждает.</summary>
+    private sealed class RefusingPeer : IRaftMessageHandler
+    {
+        public ValueTask<RequestVoteResponse> HandleRequestVoteAsync(
+            RequestVoteRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new RequestVoteResponse(request.Term, VoteGranted: true));
+
+        public ValueTask<PreVoteResponse> HandlePreVoteAsync(
+            PreVoteRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new PreVoteResponse(request.Term, VoteGranted: true));
+
+        public ValueTask<AppendEntriesResponse> HandleAppendEntriesAsync(
+            AppendEntriesRequest request,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(new AppendEntriesResponse(request.Term, Success: false));
+    }
 
     private static async ValueTask<RaftCluster> CreateElectedClusterAsync(bool checkQuorum = true)
     {

@@ -535,8 +535,11 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
                 return;
             }
 
-            if (response.Success && _progress.TryGetValue(reply.Peer, out var progress))
+            if (_progress.TryGetValue(reply.Peer, out var progress))
             {
+                // Любой ответ в нашем терме - это «пир жив», даже если журнал у него не сошёлся
+                // (S3 отвечает Success: false отставшему): отставший, но живой пир всё равно
+                // часть кворума, иначе исправный лидер уходил бы из-за чужого отставания.
                 _progress[reply.Peer] = progress with { LastResponseMs = _clock.TimestampMs };
             }
         }
