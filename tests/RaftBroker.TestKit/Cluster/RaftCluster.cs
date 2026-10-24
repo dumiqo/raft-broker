@@ -152,7 +152,7 @@ public sealed class RaftCluster : IAsyncDisposable
             .ConfigureAwait(false);
 
         var node = new RaftNode(
-            new RaftNodeOptions(id, _options.Election, _options.HeartbeatInterval, _options.PreVote),
+            new RaftNodeOptions(id, _options.Election, _options.HeartbeatInterval, _options.PreVote, _options.CheckQuorum),
             state,
             open.Store!,
             Network.CreateTransport(id),
@@ -179,6 +179,9 @@ public sealed class RaftClusterOptions
 
     /// <summary>Включён ли PreVote у узлов кластера.</summary>
     public bool PreVote { get; set; } = true;
+
+    /// <summary>Включён ли CheckQuorum и leader stickiness у узлов кластера (<c>S2-T09</c>).</summary>
+    public bool CheckQuorum { get; set; } = true;
 
     /// <summary>Интервал heartbeat; по умолчанию треть срока выборов.</summary>
     public TimeSpan? HeartbeatInterval { get; set; }

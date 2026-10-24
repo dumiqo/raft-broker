@@ -26,6 +26,7 @@ public static class RequestVoteHandler
     /// <param name="state">Состояние узла: term, голос и роль меняются здесь.</param>
     /// <param name="lastLogTerm">Term последней записи локального журнала; 0 - журнал пуст.</param>
     /// <param name="lastLogIndex">Индекс последней записи локального журнала; 0 - журнал пуст.</param>
+    /// <param name="leaderContactFresh">Слышали ли лидера в пределах окна stickiness (<c>S2-T09</c>).</param>
     /// <param name="cancellationToken">Отмена: прерывание до fsync означает, что голос не считается данным.</param>
     /// <returns>Ответ кандидату; term в нём - текущий term узла после обработки.</returns>
     public static async ValueTask<RequestVoteResponse> HandleAsync(
@@ -33,11 +34,12 @@ public static class RequestVoteHandler
         RaftState state,
         Term lastLogTerm,
         LogIndex lastLogIndex,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool leaderContactFresh = false)
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        switch (RequestVoteRules.Decide(request, state.CurrentTerm, state.VotedFor, lastLogTerm, lastLogIndex))
+        switch (RequestVoteRules.Decide(request, state.CurrentTerm, state.VotedFor, lastLogTerm, lastLogIndex, leaderContactFresh))
         {
             case VoteDecision.Grant:
                 await state.PersistAsync(state.CurrentTerm, request.Candidate, cancellationToken).ConfigureAwait(false);

@@ -38,7 +38,9 @@ public enum VoteDecision
 /// <item>меньший term отбивается сразу: диск не трогаем, потому что ничего не меняется;</item>
 /// <item>больший term обнуляет голос <b>до</b> вопроса о логе: иначе следующий term унаследовал бы чужой голос;</item>
 /// <item>повторный голос тому же кандидату даётся без пересмотра лога: потерянный ответ - нормальный случай,
-/// а лог короче не становится.</item>
+/// а лог короче не становится;</item>
+/// <item>свежий лидер (<paramref name="leaderContactFresh"/>, <c>S2-T09</c>) отбивает голос до вопроса о логе и
+/// голосе в этом term: живой лидер важнее свежести чужого лога.</item>
 /// </list>
 /// </remarks>
 public static class RequestVoteRules
@@ -49,12 +51,16 @@ public static class RequestVoteRules
     /// <param name="votedFor">За кого узел голосовал в текущем term; <c>null</c> - не голосовал.</param>
     /// <param name="lastLogTerm">Term последней записи локального журнала; 0 - журнал пуст.</param>
     /// <param name="lastLogIndex">Индекс последней записи локального журнала; 0 - журнал пуст.</param>
+    /// <param name="leaderContactFresh">
+    /// Слышали ли валидный heartbeat лидера в пределах окна stickiness (<c>S2-T09</c>).
+    /// </param>
     public static VoteDecision Decide(
         RequestVoteRequest request,
         Term currentTerm,
         NodeId? votedFor,
         Term lastLogTerm,
-        LogIndex lastLogIndex)
+        LogIndex lastLogIndex,
+        bool leaderContactFresh = false)
     {
         if (request.Term < currentTerm)
         {
@@ -63,7 +69,9 @@ public static class RequestVoteRules
 
         if (request.Term > currentTerm)
         {
-            return IsUpToDate(request, lastLogTerm, lastLogIndex)
+            // Уход по большему term не отменяется stickiness: правило монотонности term важнее окна,
+            // а голос при свежем лидере всё равно не выдаётся.
+            return IsUpToDate(request, lastLogTerm, lastLogIndex) && !leaderContactFresh
                 ? VoteDecision.StepDownAndGrant
                 : VoteDecision.StepDownAndDeny;
         }
@@ -71,6 +79,11 @@ public static class RequestVoteRules
         if (votedFor == request.Candidate)
         {
             return VoteDecision.Grant;
+        }
+
+        if (leaderContactFresh)
+        {
+            return VoteDecision.Deny;
         }
 
         if (votedFor is not null)

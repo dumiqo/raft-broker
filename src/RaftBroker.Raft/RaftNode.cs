@@ -41,6 +41,12 @@ namespace RaftBroker.Raft;
 /// появились бы реальные таймеры, несовместимые с <c>TestClock</c>, и фаззер <c>S2-T10</c>
 /// перестал бы быть детерминированным.
 /// </para>
+/// <para>
+/// CheckQuorum и leader stickiness (<c>S2-T09</c>) живут на одном состоянии - «когда я последний
+/// раз слышал кворум/лидера» - и на одном окне <c>T</c>. Своего таймера у них тоже нет: окно
+/// проверяется в том же <see cref="StepAsync"/>, что и heartbeat, поэтому прогон на виртуальных
+/// часах воспроизводим.
+/// </para>
 /// </remarks>
 public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 {
@@ -52,11 +58,16 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
     private readonly ElectionTimer _timer;
     private readonly IClock _clock;
     private readonly int _heartbeatIntervalMs;
+    private readonly int _quorumWindowMs;
     private readonly bool _preVoteEnabled;
+    private readonly bool _checkQuorum;
     private readonly Dictionary<NodeId, PeerProgress> _progress = [];
 
     /// <summary>Сигнал таймера: выставляется в его потоке, читается в <see cref="StepAsync"/>.</summary>
     private volatile bool _electionDue;
+
+    /// <summary>Когда узел последний раз принял валидный heartbeat лидера; <c>null</c> - ни разу.</summary>
+    private long? _lastLeaderContactMs;
 
     /// <summary>Номер раунда: ответы прошлых раундов не считаются.</summary>
     private long _round;
@@ -104,7 +115,9 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         Id = options.Id;
         _clock = clock;
         _heartbeatIntervalMs = (int)options.HeartbeatInterval.TotalMilliseconds;
+        _quorumWindowMs = (int)options.Election.Timeout.TotalMilliseconds;
         _preVoteEnabled = options.PreVote;
+        _checkQuorum = options.CheckQuorum;
         _timer = new ElectionTimer(clock, random, options.Election, () => _electionDue = true);
     }
 
@@ -164,6 +177,14 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
                     await SendHeartbeatsAsync(cancellationToken).ConfigureAwait(false);
                 }
 
+                // CheckQuorum после отправки, а не до: иначе лидер, который шагает реже, чем
+                // приходят ответы, считал бы кворум потерянным из-за собственного расписания.
+                if (_state.Role == RaftRole.Leader && !HasResponsiveQuorum(_clock.TimestampMs))
+                {
+                    // Терм тот же, поэтому на диск не пишется ничего: это не терм-переход (S2-T08).
+                    await StepDownAsync(_state.CurrentTerm, cancellationToken).ConfigureAwait(false);
+                }
+
                 return null;
             }
 
@@ -221,7 +242,13 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
             var previousTerm = _state.CurrentTerm;
 
             var response = await RequestVoteHandler
-                .HandleAsync(request, _state, _log.LastTerm, _log.LastIndex, cancellationToken)
+                .HandleAsync(
+                    request,
+                    _state,
+                    _log.LastTerm,
+                    _log.LastIndex,
+                    cancellationToken,
+                    IsLeaderContactFresh())
                 .ConfigureAwait(false);
 
             if (response.VoteGranted || response.Term > previousTerm)
@@ -546,7 +573,8 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
         try
         {
-            var granted = PreVoteRules.WouldGrant(request, _state.CurrentTerm, _log.LastTerm, _log.LastIndex);
+            var granted = !IsLeaderContactFresh()
+                && PreVoteRules.WouldGrant(request, _state.CurrentTerm, _log.LastTerm, _log.LastIndex);
 
             // Ни term, ни голос, ни таймер: ответ на PreVote - это только намерение. Сброс таймера
             // здесь позволил бы любому узлу глушить выборы кластера одним опросом.
@@ -584,6 +612,10 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
 
             _state.LeaderId = request.Leader;
 
+            // Валидный heartbeat - то самое «слышал лидера»: по нему же считается окно stickiness
+            // и запрет на новые выборы, пока лидер жив (S2-T09).
+            _lastLeaderContactMs = _clock.TimestampMs;
+
             return new AppendEntriesResponse(_state.CurrentTerm, Success: true);
         }
         finally
@@ -619,6 +651,46 @@ public sealed class RaftNode : IRaftMessageHandler, IAsyncDisposable
         _state.LeaderId = null;
         LeaveRole();
     }
+
+    /// <summary>Кворум отвечал лидеру в пределах окна (<c>S2-T09</c>, правило 6 спецификации).</summary>
+    /// <param name="nowMs">Текущее монотонное время.</param>
+    /// <remarks>
+    /// Состав кворума спрашивается у <see cref="IClusterConfiguration"/>, как и в выборах: своего
+    /// счётчика «большинства» здесь нет. Себя лидер считает ответившим всегда - собственный голос
+    /// и есть его часть кворума. Учитывается только ответ, а не факт отправки: «отправил» и
+    /// «услышал» - разные вещи при партиции.
+    /// </remarks>
+    private bool HasResponsiveQuorum(long nowMs)
+    {
+        if (!_checkQuorum)
+        {
+            return true;
+        }
+
+        var responders = new List<NodeId> { Id };
+
+        foreach (var progress in _progress.Values)
+        {
+            if (nowMs - progress.LastResponseMs < _quorumWindowMs)
+            {
+                responders.Add(progress.Peer);
+            }
+        }
+
+        return _configuration.IsQuorum(responders);
+    }
+
+    /// <summary>
+    /// Слышали ли валидный heartbeat лидера в пределах окна <c>T</c> (<c>S2-T09</c>, правило 5).
+    /// </summary>
+    /// <remarks>
+    /// Отметка не сбрасывается уходом в follower: это факт о прошлом, а не о роли, и без него
+    /// кандидат с большим term получал бы голос сразу после первого же запроса.
+    /// </remarks>
+    private bool IsLeaderContactFresh()
+        => _checkQuorum
+            && _lastLeaderContactMs is { } heard
+            && _clock.TimestampMs - heard < _quorumWindowMs;
 
     /// <summary>Уборка ролевых ресурсов: репликаторы и сигнал таймера выборов.</summary>
     /// <remarks>

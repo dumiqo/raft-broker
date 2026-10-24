@@ -160,6 +160,9 @@ public sealed class RaftNodePreVoteTests
         var votedFor = node.VotedFor;
 
         // Act: согласие и отказ в одном тесте - состояние не меняется ни в одном случае.
+        // Окно stickiness истекло: иначе отказ пришёл бы от живого лидера (S2-T09), а не от правил PreVote.
+        cluster.Clock.Advance(Timeout + TimeSpan.FromMilliseconds(1));
+
         var granted = await node.HandlePreVoteAsync(
             new PreVoteRequest(Second, term.Next(), LogIndex.Empty, new Term(0)),
             CancellationToken.None);
