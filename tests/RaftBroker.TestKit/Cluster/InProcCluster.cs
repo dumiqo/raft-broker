@@ -44,6 +44,10 @@ public sealed class InProcCluster
         _handlers[node] = handler;
     }
 
+    /// <summary>Снимает получателя с регистрации: сообщения ему считаются недоставленными.</summary>
+    /// <param name="node">Узел, который «упал» или вышел из кластера.</param>
+    public void Unregister(NodeId node) => _handlers.Remove(node);
+
     /// <summary>Создаёт транспорт, который отправляет сообщения от имени узла.</summary>
     /// <param name="self">Отправитель.</param>
     public IPeerTransport CreateTransport(NodeId self) => new InProcTransport(this, self);

@@ -29,6 +29,7 @@ namespace RaftBroker.TestKit.Cluster;
 public sealed class RaftCluster : IAsyncDisposable
 {
     private readonly List<RaftNode> _nodes = [];
+    private readonly List<NodeId> _slots = [];
     private readonly Dictionary<NodeId, FakeStorageFileSystem> _fileSystems = [];
     private readonly Dictionary<NodeId, ILogStore> _logs = [];
     private readonly RaftClusterOptions _options;
@@ -98,13 +99,47 @@ public sealed class RaftCluster : IAsyncDisposable
 
     /// <summary>Останавливает узел, не освобождая его хранилища: процесс «упал».</summary>
     /// <param name="id">Кого остановить.</param>
-    /// <remarks>Журнал и hard state остаются на своих местах - именно они переживают падение.</remarks>
+    /// <remarks>
+    /// Журнал и hard state остаются на своих местах - именно они переживают падение.
+    /// Узел снимается с регистрации в сети: сообщение упавшему узлу - это недоставка, а не вызов
+    /// метода освобождённого объекта.
+    /// </remarks>
     public async ValueTask StopAsync(NodeId id)
     {
         var index = _nodes.FindIndex(node => node.Id == id);
 
         await _nodes[index].DisposeAsync().ConfigureAwait(false);
         _nodes.RemoveAt(index);
+        Network.Unregister(id);
+    }
+
+    /// <summary>
+    /// Перезапускает остановленный узел (<c>S2-T10</c>): те же файлы, новый объект узла.
+    /// </summary>
+    /// <param name="id">Кого вернуть в кластер.</param>
+    /// <returns>Живой узел с состоянием, прочитанным с диска.</returns>
+    /// <remarks>
+    /// Term и голос берутся из hard state, а не из памяти: именно это и проверяет фаззер -
+    /// голос обязан пережить падение (R6). Журнал переиспользуется открытым: на S2 в него пишется
+    /// только no-op запись, а восстановление журнала - предмет <c>S1-T07</c>.
+    /// </remarks>
+    public async ValueTask<RaftNode> RestartAsync(NodeId id)
+    {
+        if (_nodes.Exists(node => node.Id == id))
+        {
+            throw new InvalidOperationException($"Узел '{id}' уже работает: перезапускать нечего.");
+        }
+
+        if (!_fileSystems.TryGetValue(id, out var fileSystem))
+        {
+            throw new ArgumentException($"Узел '{id}' в этом кластере не создавался.", nameof(id));
+        }
+
+        var state = await RaftState
+            .LoadAsync(new HardStateStore(fileSystem, HardStateDirectory(id)), CancellationToken.None)
+            .ConfigureAwait(false);
+
+        return AddLiveNode(id, state, fileSystem);
     }
 
     /// <inheritdoc />
@@ -148,23 +183,42 @@ public sealed class RaftCluster : IAsyncDisposable
         }
 
         var state = await RaftState
-            .LoadAsync(new HardStateStore(fileSystem, Path.Combine(id.Value, "state")), CancellationToken.None)
+            .LoadAsync(new HardStateStore(fileSystem, HardStateDirectory(id)), CancellationToken.None)
             .ConfigureAwait(false);
+
+        _fileSystems[id] = fileSystem;
+        _logs[id] = open.Store!;
+        _slots.Add(id);
+
+        AddLiveNode(id, state, fileSystem);
+    }
+
+    private static string HardStateDirectory(NodeId id) => Path.Combine(id.Value, "state");
+
+    /// <summary>Создаёт узел поверх готового хранилища и ставит его в слот своего идентификатора.</summary>
+    /// <remarks>
+    /// Порядок в <see cref="Nodes"/> - это порядок шагов, поэтому перезапущенный узел встаёт
+    /// на место своего слота, а не в конец: иначе один и тот же сид давал бы разные прогоны.
+    /// </remarks>
+    private RaftNode AddLiveNode(NodeId id, RaftState state, FakeStorageFileSystem fileSystem)
+    {
+        var slot = _slots.IndexOf(id);
 
         var node = new RaftNode(
             new RaftNodeOptions(id, _options.Election, _options.HeartbeatInterval, _options.PreVote, _options.CheckQuorum),
             state,
-            open.Store!,
+            _logs[id],
             Network.CreateTransport(id),
             Configuration,
             Clock,
-            _options.RandomFor(_nodes.Count));
+            _options.RandomFor(slot));
 
-        _fileSystems[id] = fileSystem;
-        _logs[id] = open.Store!;
-        _nodes.Add(node);
+        var at = _nodes.FindIndex(existing => _slots.IndexOf(existing.Id) > slot);
+        _nodes.Insert(at < 0 ? _nodes.Count : at, node);
         Network.Register(id, node);
         node.Start();
+
+        return node;
     }
 }
 
